@@ -101,6 +101,7 @@ include = [
 
 [tool.hatch.build.targets.wheel.force-include]
 "src/pisama_claude_code/sample_traces" = "pisama_claude_code/sample_traces"
+"src/pisama_claude_code/skills" = "pisama_claude_code/skills"
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

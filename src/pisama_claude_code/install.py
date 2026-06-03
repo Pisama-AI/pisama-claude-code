@@ -71,9 +71,14 @@ def install(force: bool = False, auto_config: bool = True):
     # Update settings.local.json
     settings_updated = _update_settings(claude_dir, hooks_dir, auto_config=auto_config)
 
-    print("\nPISAMA installation complete!")
+    # Install the pisama-diagnose skill (Claude Code + Codex)
+    skills_installed = install_skill(force=force)
+
+    print("\nPisama installation complete!")
     print(f"Hooks installed to: {hooks_dir}")
     print(f"Traces will be stored in: {pisama_dir / 'traces'}")
+    if skills_installed:
+        print(f"Skill installed to: {', '.join(skills_installed)}")
 
     if settings_updated:
         print("\n✅ settings.local.json automatically configured")
@@ -84,7 +89,9 @@ def install(force: bool = False, auto_config: bool = True):
     print("\nNext steps:")
     print("  1. Restart Claude Code")
     print("  2. Run 'pisama-cc verify' to confirm installation")
-    print("  3. Run 'pisama-cc connect --api-key <key>' to enable analysis")
+    print("  3. Diagnose a failing run: ask Claude to use the pisama-diagnose skill,")
+    print("     or run 'python3 ~/.claude/skills/pisama-diagnose/diagnose.py <trace.json>'")
+    print("  4. Run 'pisama-cc connect --api-key <key>' to unlock the apply-ready patch")
     print("\n" + "─" * 50)
     print("⭐ If this tool saves you time/money, consider starring:")
     print("   https://github.com/tn-pisama/pisama-claude-code")
@@ -194,6 +201,57 @@ def _update_settings(claude_dir: Path, hooks_dir: Path, auto_config: bool = True
     return True
 
 
+def _bundled_skill_file(name: str) -> "str | None":
+    """Read a bundled pisama-diagnose asset by filename, or None if missing.
+
+    Works both from an installed wheel (importlib.resources) and from an
+    editable/source checkout (read next to this file).
+    """
+    try:
+        from importlib.resources import files
+        base = files("pisama_claude_code") / "skills" / "pisama-diagnose"
+        return (base / name).read_text()
+    except Exception:
+        local = Path(__file__).parent / "skills" / "pisama-diagnose" / name
+        if local.exists():
+            return local.read_text()
+        return None
+
+
+def install_skill(force: bool = False) -> list:
+    """Install the pisama-diagnose skill for Claude Code and Codex.
+
+    Drops SKILL.md + diagnose.py into ~/.claude/skills/pisama-diagnose/ and
+    ~/.codex/skills/pisama-diagnose/. The engine is self-contained (stdlib
+    only) and calls the live Pisama backend. Returns the directories written.
+    """
+    engine = _bundled_skill_file("diagnose.py")
+    claude_doc = _bundled_skill_file("SKILL.md")
+    codex_doc = _bundled_skill_file("SKILL.codex.md") or claude_doc
+    if engine is None or claude_doc is None:
+        print("Skipping skill install (bundled skill assets not found)")
+        return []
+
+    targets = [
+        (Path.home() / ".claude" / "skills" / "pisama-diagnose", claude_doc),
+        (Path.home() / ".codex" / "skills" / "pisama-diagnose", codex_doc),
+    ]
+    installed = []
+    for skill_dir, doc in targets:
+        skill_dir.mkdir(parents=True, exist_ok=True)
+        skill_path = skill_dir / "SKILL.md"
+        engine_path = skill_dir / "diagnose.py"
+        if skill_path.exists() and not force:
+            print(f"Skipping {skill_dir} (exists, use --force to overwrite)")
+            continue
+        skill_path.write_text(doc)
+        engine_path.write_text(engine)
+        engine_path.chmod(engine_path.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
+        installed.append(str(skill_dir))
+        print(f"Installed pisama-diagnose skill to {skill_dir}")
+    return installed
+
+
 def uninstall():
     """Uninstall PISAMA hooks from ~/.claude/hooks/."""
     hooks_dir = Path.home() / ".claude" / "hooks"
@@ -210,7 +268,18 @@ def uninstall():
             hook_path.unlink()
             print(f"Removed {filename}")
 
-    print("\nPISAMA hooks uninstalled.")
+    # Remove the pisama-diagnose skill (both IDEs).
+    for skill_dir in (
+        Path.home() / ".claude" / "skills" / "pisama-diagnose",
+        Path.home() / ".codex" / "skills" / "pisama-diagnose",
+    ):
+        if skill_dir.exists():
+            for child in skill_dir.iterdir():
+                child.unlink()
+            skill_dir.rmdir()
+            print(f"Removed skill {skill_dir}")
+
+    print("\nPisama hooks uninstalled.")
     print("Note: Config and traces in ~/.claude/pisama/ were preserved.")
 
 
