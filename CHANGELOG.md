@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.3] - 2026-06-02
+
+### Added
+- **`/pisama-diagnose` skill** for Claude Code and Codex. Turns an agent trace
+  into a root-cause diagnosis via the public `/atif/analyze` endpoint. With a
+  connected key it also renders a ready-to-paste CLAUDE.md/.cursorrules guardrail
+  plus a verification command block (from `/healing/trigger/sync`), and can
+  auto-apply the fix to a live n8n workflow via `--apply`. Installed to
+  `~/.claude/skills` and `~/.codex/skills` by `pisama-cc install`.
+
+### Fixed
+- Point the `connect` default API URL and dashboard links at `api.pisama.ai`
+  and `app.pisama.ai` (were the pre-rebrand `maotesting.com`).
+
 ## [0.4.0] - 2026-01-05
 
 ### Added

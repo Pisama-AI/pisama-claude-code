@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "pisama-claude-code"
-version = "0.4.2"
+version = "0.4.3"
 description = "Trace capture for Claude Code sessions - sync to Pisama platform for analysis"
 readme = "README.md"
 license = "MIT"
@@ -98,10 +98,6 @@ include = [
     "/src",
     "/tests",
 ]
-
-[tool.hatch.build.targets.wheel.force-include]
-"src/pisama_claude_code/sample_traces" = "pisama_claude_code/sample_traces"
-"src/pisama_claude_code/skills" = "pisama_claude_code/skills"
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
