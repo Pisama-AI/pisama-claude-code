@@ -397,8 +397,8 @@ def _truncate(text: str, max_len: int = 200) -> str:
 
 
 @main.command()
-@click.option("--api-key", required=True, help="Your PISAMA API key")
-@click.option("--api-url", default="https://api.maotesting.com", help="API base URL")
+@click.option("--api-key", required=True, help="Your Pisama API key")
+@click.option("--api-url", default="https://api.pisama.ai", help="API base URL")
 @click.option("--auto-sync/--no-auto-sync", default=True, help="Enable auto-sync")
 def connect(api_key: str, api_url: str, auto_sync: bool):
     """Connect to PISAMA platform."""
@@ -514,7 +514,7 @@ def analyze(last: int):
         click.echo("   • Self-healing capabilities")
         click.echo("")
         click.echo("Run: pisama-cc connect --api-key <your-key>")
-        click.echo("Get your key at: https://app.maotesting.com/settings/api")
+        click.echo("Get your key at: https://app.pisama.ai/settings/api")
         return
 
     click.echo(f"🔍 Analyzing last {last} traces...")
@@ -577,7 +577,7 @@ def display_analysis_results(results: dict):
     # Summary
     click.echo("\n" + "─" * 50)
     click.echo(f"Found {len(detections)} issue(s)")
-    click.echo(f"View details at: {results.get('dashboard_url', 'https://app.maotesting.com')}")
+    click.echo(f"View details at: {results.get('dashboard_url', 'https://app.pisama.ai')}")
 
 
 # =============================================================================
