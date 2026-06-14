@@ -160,17 +160,23 @@ class TestPrivacy:
         assert result == "~/projects/secret-project/file.py"
         assert home not in result
     
-    def test_sanitize_input_truncates_long_values(self):
-        """Test that long values are truncated."""
+    def test_sanitize_input_preserves_full_content(self):
+        """Full-content mode keeps moderately long values intact."""
         from pisama_claude_code.cli import sanitize_input
-        
-        inp = {
-            "content": "x" * 1000  # Very long content
-        }
-        
+
+        inp = {"content": "x" * 1000}  # well under the cap
         result = sanitize_input(inp)
-        
-        assert len(result["content"]) < 600
+
+        assert result["content"] == "x" * 1000
+
+    def test_sanitize_input_truncates_beyond_cap(self):
+        """Only values larger than MAX_FIELD_CHARS are truncated."""
+        from pisama_claude_code.cli import sanitize_input, MAX_FIELD_CHARS
+
+        inp = {"content": "x" * (MAX_FIELD_CHARS + 500)}
+        result = sanitize_input(inp)
+
+        assert len(result["content"]) <= MAX_FIELD_CHARS + len("...[truncated]")
         assert "[truncated]" in result["content"]
 
 

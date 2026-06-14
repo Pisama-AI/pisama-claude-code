@@ -13,11 +13,28 @@ from typing import Dict, Any
 
 
 HOOK_TEMPLATE = '''#!{python_path}
-"""Auto-generated PISAMA capture hook."""
+"""Auto-generated Pisama capture hook."""
 
 from pisama_claude_code.hooks.capture_hook import main
 main()
 '''
+
+FORWARD_TEMPLATE = '''#!{python_path}
+"""Auto-generated Pisama forward hook."""
+
+from pisama_claude_code.hooks.forward_hook import main
+main()
+'''
+
+
+def _write_hook_entry(path: Path, template: str, python_path: str, force: bool):
+    """Write an auto-generated hook entry-point script and make it executable."""
+    if path.exists() and not force:
+        print(f"Skipping {path.name} (exists, use --force to overwrite)")
+        return
+    path.write_text(template.format(python_path=python_path))
+    path.chmod(path.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
+    print(f"Installed {path.name}")
 
 
 def install(force: bool = False, auto_config: bool = True):
@@ -39,15 +56,9 @@ def install(force: bool = False, auto_config: bool = True):
     # Use the Python executable that has pisama_claude_code installed
     python_path = sys.executable
 
-    # Install capture hook
-    hook_path = hooks_dir / "pisama-capture.py"
-    if hook_path.exists() and not force:
-        print(f"Skipping pisama-capture.py (exists, use --force to overwrite)")
-    else:
-        content = HOOK_TEMPLATE.format(python_path=python_path)
-        hook_path.write_text(content)
-        hook_path.chmod(hook_path.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
-        print("Installed pisama-capture.py")
+    # Install hook entry-points: capture (PostToolUse) + forward (Stop)
+    _write_hook_entry(hooks_dir / "pisama-capture.py", HOOK_TEMPLATE, python_path, force)
+    _write_hook_entry(hooks_dir / "pisama-forward.py", FORWARD_TEMPLATE, python_path, force)
 
     # Install shell wrappers
     _install_shell_hooks(hooks_dir, force)
@@ -98,47 +109,96 @@ def install(force: bool = False, auto_config: bool = True):
 
 
 def _install_shell_hooks(hooks_dir: Path, force: bool):
-    """Install shell wrapper hooks."""
-    # Pre-hook shell script
-    pre_script = '''#!/bin/bash
-# PISAMA Pre-hook - capture tool calls
-PISAMA_HOOK_TYPE=pre ~/.claude/hooks/pisama-capture.py
-'''
-
-    pre_path = hooks_dir / "pisama-pre.sh"
-    if not pre_path.exists() or force:
-        pre_path.write_text(pre_script)
-        pre_path.chmod(pre_path.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
-        print("Installed pisama-pre.sh")
-
-    # Post-hook shell script
+    """Install shell wrapper hooks (capture on PostToolUse, forward on Stop)."""
+    # Capture wrapper. Records the tool call + surrounding turn to the local
+    # store. Registered async in settings so it stays off the critical path.
     post_script = '''#!/bin/bash
-# PISAMA Post-hook - capture tool results
+# Pisama capture hook - record the tool call + surrounding turn locally.
 PISAMA_HOOK_TYPE=post ~/.claude/hooks/pisama-capture.py
 '''
-
     post_path = hooks_dir / "pisama-post.sh"
     if not post_path.exists() or force:
         post_path.write_text(post_script)
         post_path.chmod(post_path.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
         print("Installed pisama-post.sh")
 
+    # Forward wrapper. Flushes unsynced traces to Pisama in a DETACHED background
+    # process, so a slow or failed network call can never block or delay the
+    # session, even if the harness does not honor the "async" hook flag. We read
+    # the hook payload off stdin first, then hand it to the background process.
+    forward_script = '''#!/bin/bash
+# Pisama forward hook - flush unsynced traces to the Pisama platform.
+input=$(cat)
+echo "$input" | nohup ~/.claude/hooks/pisama-forward.py >/dev/null 2>&1 &
+exit 0
+'''
+    forward_path = hooks_dir / "pisama-forward.sh"
+    if not forward_path.exists() or force:
+        forward_path.write_text(forward_script)
+        forward_path.chmod(forward_path.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
+        print("Installed pisama-forward.sh")
+
+
+# Canonical Pisama hook entries. Claude Code expects, under each event name, a
+# list of matcher-groups; each group has a nested "hooks" list of command
+# entries. Timeouts are in SECONDS. async=true keeps the hooks off the
+# interactive critical path. PostToolUse captures every tool call; Stop flushes
+# the turn's traces to the platform.
+PISAMA_HOOK_EVENTS = {
+    "PostToolUse": {
+        "matcher": "*",
+        "hooks": [{
+            "type": "command",
+            "command": "~/.claude/hooks/pisama-post.sh",
+            "timeout": 10,
+            "async": True,
+        }],
+    },
+    "Stop": {
+        "matcher": "*",
+        "hooks": [{
+            "type": "command",
+            "command": "~/.claude/hooks/pisama-forward.sh",
+            "timeout": 30,
+            "async": True,
+        }],
+    },
+}
+
+# Event names written by the pre-fix installer (wrong names + flat shape). Any
+# pisama entries left under these never fired; strip them on (re)install.
+_STALE_EVENTS = ("PreToolCall", "PostToolCall")
+
+
+def _strip_pisama(groups: list) -> list:
+    """Drop entries referencing a pisama hook, handling both the old flat shape
+    ({"command": ...}) and the correct nested shape ({"hooks": [{"command": ...}]})."""
+    out = []
+    for g in groups:
+        if not isinstance(g, dict):
+            out.append(g)
+            continue
+        if "pisama" in str(g.get("command", "")):
+            continue  # old flat pisama entry
+        inner = g.get("hooks")
+        if isinstance(inner, list):
+            kept = [h for h in inner if "pisama" not in str(h.get("command", ""))]
+            if not kept:
+                continue  # group held only pisama hooks
+            g = {**g, "hooks": kept}
+        out.append(g)
+    return out
+
 
 def _update_settings(claude_dir: Path, hooks_dir: Path, auto_config: bool = True) -> bool:
-    """Update settings.local.json with hook configuration.
+    """Reconcile settings.local.json so PostToolUse + Stop carry the canonical
+    Pisama hooks (and stale pre-fix entries are removed).
 
-    Args:
-        claude_dir: Path to ~/.claude
-        hooks_dir: Path to hooks directory
-        auto_config: If True, actually modify the file. If False, just print instructions.
-
-    Returns:
-        True if settings were modified, False otherwise
+    Returns True if settings were modified, False otherwise.
     """
     settings_path = claude_dir / "settings.local.json"
     backup_path = claude_dir / "settings.local.json.pisama-backup"
 
-    # Load existing settings
     if settings_path.exists():
         try:
             settings = json.loads(settings_path.read_text())
@@ -148,54 +208,44 @@ def _update_settings(claude_dir: Path, hooks_dir: Path, auto_config: bool = True
     else:
         settings = {}
 
-    # Define PISAMA hook configuration
-    pisama_pre_hook = {
-        "command": "~/.claude/hooks/pisama-pre.sh",
-        "timeout": 2000
-    }
-    pisama_post_hook = {
-        "command": "~/.claude/hooks/pisama-post.sh",
-        "timeout": 2000
-    }
-
-    # Get existing hooks
     hooks = settings.get("hooks", {})
     modified = False
 
-    # Check if PISAMA hooks already exist
-    def _has_pisama_hook(hook_list: list) -> bool:
-        return any("pisama" in h.get("command", "") for h in hook_list)
+    # Remove stale entries left by the broken installer.
+    for event in _STALE_EVENTS:
+        grp = hooks.get(event)
+        if not isinstance(grp, list):
+            continue
+        cleaned = _strip_pisama(grp)
+        if cleaned != grp:
+            modified = True
+            if cleaned:
+                hooks[event] = cleaned
+            else:
+                hooks.pop(event, None)
 
-    # Add PreToolCall hook if not present
-    if "PreToolCall" not in hooks:
-        hooks["PreToolCall"] = []
-    if not _has_pisama_hook(hooks["PreToolCall"]):
-        hooks["PreToolCall"].append(pisama_pre_hook)
-        modified = True
-
-    # Add PostToolCall hook if not present
-    if "PostToolCall" not in hooks:
-        hooks["PostToolCall"] = []
-    if not _has_pisama_hook(hooks["PostToolCall"]):
-        hooks["PostToolCall"].append(pisama_post_hook)
-        modified = True
+    # Reconcile each target event to exactly one canonical pisama entry.
+    for event, group in PISAMA_HOOK_EVENTS.items():
+        existing = hooks.get(event)
+        existing = existing if isinstance(existing, list) else []
+        reconciled = _strip_pisama(existing) + [group]
+        if reconciled != existing:
+            modified = True
+        hooks[event] = reconciled
 
     if not modified:
-        print("PISAMA hooks already configured in settings.local.json")
+        print("Pisama hooks already configured in settings.local.json")
         return False
 
     if not auto_config:
-        # Print instructions instead of modifying
         print("\nNote: Add the following to your settings.local.json hooks:")
         print(json.dumps({"hooks": hooks}, indent=2))
         return False
 
-    # Create backup before modifying
     if settings_path.exists():
         shutil.copy2(settings_path, backup_path)
         print(f"Backed up settings to {backup_path.name}")
 
-    # Update settings and write
     settings["hooks"] = hooks
     settings_path.write_text(json.dumps(settings, indent=2))
     return True
@@ -254,12 +304,15 @@ def install_skill(force: bool = False) -> list:
 
 def uninstall():
     """Uninstall PISAMA hooks from ~/.claude/hooks/."""
-    hooks_dir = Path.home() / ".claude" / "hooks"
+    claude_dir = Path.home() / ".claude"
+    hooks_dir = claude_dir / "hooks"
 
     hooks = [
         "pisama-capture.py",
-        "pisama-pre.sh",
+        "pisama-forward.py",
+        "pisama-pre.sh",      # legacy
         "pisama-post.sh",
+        "pisama-forward.sh",
     ]
 
     for filename in hooks:
@@ -267,6 +320,31 @@ def uninstall():
         if hook_path.exists():
             hook_path.unlink()
             print(f"Removed {filename}")
+
+    # Strip Pisama hook entries from settings.local.json (all event names).
+    settings_path = claude_dir / "settings.local.json"
+    if settings_path.exists():
+        try:
+            settings = json.loads(settings_path.read_text())
+            settings_hooks = settings.get("hooks", {})
+            changed = False
+            for event in list(settings_hooks.keys()):
+                grp = settings_hooks[event]
+                if not isinstance(grp, list):
+                    continue
+                cleaned = _strip_pisama(grp)
+                if cleaned != grp:
+                    changed = True
+                    if cleaned:
+                        settings_hooks[event] = cleaned
+                    else:
+                        settings_hooks.pop(event, None)
+            if changed:
+                settings["hooks"] = settings_hooks
+                settings_path.write_text(json.dumps(settings, indent=2))
+                print("Removed Pisama hooks from settings.local.json")
+        except json.JSONDecodeError:
+            pass
 
     # Remove the pisama-diagnose skill (both IDEs).
     for skill_dir in (
@@ -298,78 +376,108 @@ def verify() -> bool:
     hooks_dir = claude_dir / "hooks"
     settings_path = claude_dir / "settings.local.json"
 
+    capture_entry = hooks_dir / "pisama-capture.py"
+    forward_entry = hooks_dir / "pisama-forward.py"
+    post_wrapper = hooks_dir / "pisama-post.sh"
+    forward_wrapper = hooks_dir / "pisama-forward.sh"
+
+    def _executable(p: Path) -> bool:
+        return p.exists() and bool(p.stat().st_mode & stat.S_IXUSR)
+
+    def _event_has_pisama(hooks: dict, event: str) -> bool:
+        for g in hooks.get(event, []):
+            if not isinstance(g, dict):
+                continue
+            for h in g.get("hooks", []):
+                if "pisama" in str(h.get("command", "")):
+                    return True
+        return False
+
     checks: Dict[str, bool] = {
-        "hooks_directory": False,
-        "capture_hook": False,
-        "pre_hook": False,
-        "post_hook": False,
-        "pre_hook_executable": False,
-        "post_hook_executable": False,
-        "settings_file": False,
-        "hooks_configured": False,
+        "hooks_directory": hooks_dir.exists() and hooks_dir.is_dir(),
+        "capture_entry": capture_entry.exists(),
+        "forward_entry": forward_entry.exists(),
+        "post_wrapper_executable": _executable(post_wrapper),
+        "forward_wrapper_executable": _executable(forward_wrapper),
+        "settings_file": settings_path.exists(),
+        "posttooluse_configured": False,
+        "stop_configured": False,
     }
 
-    # Check hooks directory
-    checks["hooks_directory"] = hooks_dir.exists() and hooks_dir.is_dir()
-
-    # Check hook files exist
-    capture_path = hooks_dir / "pisama-capture.py"
-    pre_path = hooks_dir / "pisama-pre.sh"
-    post_path = hooks_dir / "pisama-post.sh"
-
-    checks["capture_hook"] = capture_path.exists()
-    checks["pre_hook"] = pre_path.exists()
-    checks["post_hook"] = post_path.exists()
-
-    # Check hooks are executable
-    if checks["pre_hook"]:
-        checks["pre_hook_executable"] = bool(pre_path.stat().st_mode & stat.S_IXUSR)
-    if checks["post_hook"]:
-        checks["post_hook_executable"] = bool(post_path.stat().st_mode & stat.S_IXUSR)
-
-    # Check settings file exists
-    checks["settings_file"] = settings_path.exists()
-
-    # Check hooks are configured in settings
     if settings_path.exists():
         try:
-            settings = json.loads(settings_path.read_text())
-            hooks = settings.get("hooks", {})
-
-            pre_configured = any(
-                "pisama" in h.get("command", "")
-                for h in hooks.get("PreToolCall", [])
-            )
-            post_configured = any(
-                "pisama" in h.get("command", "")
-                for h in hooks.get("PostToolCall", [])
-            )
-            checks["hooks_configured"] = pre_configured and post_configured
+            hooks = json.loads(settings_path.read_text()).get("hooks", {})
+            checks["posttooluse_configured"] = _event_has_pisama(hooks, "PostToolUse")
+            checks["stop_configured"] = _event_has_pisama(hooks, "Stop")
         except json.JSONDecodeError:
             pass
 
-    # Print results
-    print("\nPISAMA Installation Verification")
+    print("\nPisama Installation Verification")
     print("=" * 40)
 
     all_passed = True
     for check, passed in checks.items():
         icon = "✅" if passed else "❌"
-        label = check.replace("_", " ").title()
-        print(f"  {icon} {label}")
+        print(f"  {icon} {check.replace('_', ' ').title()}")
         if not passed:
             all_passed = False
-
     print("=" * 40)
 
+    # Live smoke check (informational): how many traces captured recently.
+    recent = _recent_trace_count(claude_dir)
+    if recent is not None:
+        print(f"  ℹ️  {recent} trace(s) captured in the last 24h")
+        if all_passed and recent == 0:
+            print("     (Run some tool calls in a Claude Code session, then re-check.)")
+
     if all_passed:
-        print("✅ All checks passed! PISAMA is ready.")
+        print("✅ All checks passed! Pisama is ready.")
         print("\nRun 'pisama-cc status' to see current state.")
     else:
         print("❌ Some checks failed.")
-        print("\nTo fix, run: pisama-cc install")
+        print("\nTo fix, run: pisama-cc install --force  (then restart Claude Code)")
 
     return all_passed
+
+
+def _recent_trace_count(claude_dir: Path) -> "int | None":
+    """Count traces captured in the last 24h from the local JSONL store.
+
+    Returns None if the trace store is absent (nothing captured yet)."""
+    from datetime import datetime, timedelta, timezone
+
+    traces_dir = claude_dir / "pisama" / "traces"
+    if not traces_dir.exists():
+        return None
+    cutoff = datetime.now(timezone.utc) - timedelta(hours=24)
+    count = 0
+    found_any = False
+    for jsonl in traces_dir.glob("traces-*.jsonl"):
+        found_any = True
+        try:
+            for line in jsonl.read_text().splitlines():
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    rec = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                ts = rec.get("timestamp") or rec.get("time")
+                if not ts:
+                    count += 1  # undated row still counts as captured
+                    continue
+                try:
+                    when = datetime.fromisoformat(str(ts).replace("Z", "+00:00"))
+                    if when.tzinfo is None:
+                        when = when.replace(tzinfo=timezone.utc)
+                    if when >= cutoff:
+                        count += 1
+                except ValueError:
+                    count += 1
+        except OSError:
+            continue
+    return count if found_any else None
 
 
 def main():

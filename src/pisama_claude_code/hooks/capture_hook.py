@@ -359,29 +359,25 @@ def main():
         hook_data = {"error": str(e)}
 
     try:
-        # Import and use pisama_claude_code for capture
-        from pisama_claude_code.adapter import ClaudeCodeAdapter
-
-        adapter = ClaudeCodeAdapter()
-        span = adapter.capture_span(hook_data)
-        adapter.store_span(span, hook_data)
-
-    except ImportError:
-        # Fall back to basic capture
-        _fallback_capture(hook_data, hook_type)
+        # Capture the tool call plus the reconstructed turn (user prompt,
+        # reasoning, AI output, tokens, cost) in the flat record shape the sync
+        # pipeline and the backend ingest model expect.
+        _capture(hook_data, hook_type)
     except Exception as e:
-        # Log error but don't fail
-        print(f"PISAMA capture error: {e}", file=sys.stderr)
+        # Never block the session on a capture error.
+        print(f"Pisama capture error: {e}", file=sys.stderr)
 
     # Always exit successfully (don't block)
     sys.exit(0)
 
 
-def _fallback_capture(hook_data: dict, hook_type: str) -> None:
-    """Fallback capture when pisama_claude_code is not installed.
+def _capture(hook_data: dict, hook_type: str) -> None:
+    """Capture a tool call plus the reconstructed turn to the local store.
 
-    Provides basic trace storage without the full pisama-core stack.
-    Now includes AI response, token usage, and cost tracking.
+    Writes a flat record (JSONL + SQLite) carrying tool I/O, the user prompt,
+    the assistant's reasoning and output, the model, token usage and cost. This
+    is the shape that normalize_trace / prepare_sync_payload and the backend
+    Claude Code ingest model consume.
     """
     import sqlite3
     from datetime import datetime, timezone
@@ -397,7 +393,14 @@ def _fallback_capture(hook_data: dict, hook_type: str) -> None:
     session_id = hook_data.get("session_id", os.environ.get("CLAUDE_SESSION_ID", "unknown"))
     tool_name = hook_data.get("tool_name", hook_data.get("tool", "unknown"))
     tool_input = hook_data.get("tool_input", hook_data.get("input", {}))
-    tool_output = hook_data.get("tool_response", hook_data.get("tool_output"))
+    # Claude Code PostToolUse passes the result under tool_result (current);
+    # older builds used tool_response. Accept both, then legacy tool_output.
+    tool_output = hook_data.get("tool_result")
+    if tool_output is None:
+        tool_output = hook_data.get("tool_response")
+    if tool_output is None:
+        tool_output = hook_data.get("tool_output")
+    working_dir = hook_data.get("cwd") or hook_data.get("working_dir") or os.getcwd()
 
     # Get AI response and token usage from transcript (PostToolUse only)
     model = None
@@ -436,7 +439,7 @@ def _fallback_capture(hook_data: dict, hook_type: str) -> None:
         "tool_name": tool_name,
         "tool_input": tool_input,
         "tool_output": tool_output,
-        "working_dir": os.getcwd(),
+        "working_dir": working_dir,
         # Model and usage
         "model": model,
         "usage": usage,
@@ -518,7 +521,7 @@ def _fallback_capture(hook_data: dict, hook_type: str) -> None:
             tool_name,
             json.dumps(trace.get("tool_input")) if trace.get("tool_input") else None,
             json.dumps(trace.get("tool_output")) if trace.get("tool_output") else None,
-            os.getcwd(),
+            working_dir,
             model,
             usage.get("input_tokens"),
             usage.get("output_tokens"),
@@ -533,6 +536,11 @@ def _fallback_capture(hook_data: dict, hook_type: str) -> None:
         conn.close()
     except Exception:
         pass
+
+
+# Backwards-compatible alias: this used to be the import-failure fallback path,
+# it is now the primary capture path.
+_fallback_capture = _capture
 
 
 if __name__ == "__main__":

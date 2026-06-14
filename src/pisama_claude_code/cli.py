@@ -32,9 +32,11 @@ OTEL Export:
     pisama-cc export-otel -e http://localhost:4318/v1/traces
 """
 
+import base64
 import click
 import json
 import gzip
+import time
 from pathlib import Path
 from datetime import datetime, timezone
 from typing import Optional
@@ -52,6 +54,15 @@ CONFIG_FILE = CONFIG_DIR / "config.json"
 TRACES_DIR = CONFIG_DIR / "traces"
 HOOKS_DIR = CLAUDE_DIR / "hooks"
 
+# The Pisama v1 API is mounted under /api/v1. Auth is JWT: exchange the API key
+# for a short-lived token, then send it as a Bearer credential.
+API_PREFIX = "/api/v1"
+JWT_LEEWAY_SECONDS = 60
+DEFAULT_API_URL = "https://api.pisama.ai"
+# Per-field size cap for forwarded content. Generous (full content) but bounded
+# so a single huge tool output can't create a runaway payload.
+MAX_FIELD_CHARS = 100_000
+
 
 def get_config() -> dict:
     """Load Pisama config."""
@@ -67,6 +78,112 @@ def save_config(config: dict):
     """Save Pisama config."""
     CONFIG_DIR.mkdir(parents=True, exist_ok=True)
     CONFIG_FILE.write_text(json.dumps(config, indent=2))
+
+
+def api_url(config: dict, path: str) -> str:
+    """Build a full API URL for `path` (e.g. '/traces/claude-code/ingest').
+
+    Tolerates an api_url that already includes a trailing '/api'."""
+    base = (config.get("api_url") or DEFAULT_API_URL).rstrip("/")
+    if base.endswith("/api"):
+        base = base[: -len("/api")]
+    return f"{base}{API_PREFIX}{path}"
+
+
+def _jwt_payload(token: str) -> dict:
+    """Best-effort decode of a JWT payload (no signature verification)."""
+    try:
+        part = token.split(".")[1]
+        part += "=" * (-len(part) % 4)
+        return json.loads(base64.urlsafe_b64decode(part.encode()))
+    except Exception:
+        return {}
+
+
+def get_jwt(config: dict) -> Optional[str]:
+    """Exchange the stored API key for a short-lived JWT, caching it in config.
+
+    Returns the token, or None if httpx is missing, no key is set, or the
+    exchange fails. Reuses a cached token until it is near expiry.
+    """
+    if httpx is None:
+        return None
+    if not config.get("api_key"):
+        return None
+
+    now = int(time.time())
+    cached = config.get("jwt")
+    if cached and int(config.get("jwt_exp", 0)) - JWT_LEEWAY_SECONDS > now:
+        return cached
+
+    try:
+        resp = httpx.post(
+            api_url(config, "/auth/token"),
+            json={"api_key": config["api_key"], "scope": "ingest"},
+            timeout=15,
+        )
+    except Exception:
+        return None
+    if resp.status_code != 200:
+        return None
+    token = resp.json().get("access_token")
+    if not token:
+        return None
+
+    payload = _jwt_payload(token)
+    config["jwt"] = token
+    config["jwt_exp"] = int(payload.get("exp", now + 3600))
+    if payload.get("tenant_id"):
+        config["tenant_id"] = payload["tenant_id"]
+    save_config(config)
+    return token
+
+
+def _dashboard_url(config: dict) -> str:
+    """Human URL where ingested traces show up."""
+    base = (config.get("api_url") or DEFAULT_API_URL).rstrip("/")
+    base = base.replace("://api.", "://app.")
+    return base
+
+
+def push_sessions(config: dict, session_ids, include_outputs: bool) -> tuple:
+    """Forward COMPLETE sessions to the platform.
+
+    The backend ingest replaces a session wholesale on each upload (delete +
+    recreate), so we always send every captured trace for each target session
+    rather than a partial slice. Returns (ok: bool, message: str, result: dict|None).
+    """
+    if httpx is None:
+        return False, "httpx not installed", None
+    token = get_jwt(config)
+    if not token:
+        return False, "authentication failed (check API key and --api-url)", None
+
+    traces = _traces_for_sessions(session_ids)
+    if not traces:
+        return False, "no captured traces for the requested session(s)", None
+
+    payload = prepare_sync_payload(traces, include_outputs)
+    try:
+        resp = httpx.post(
+            api_url(config, "/traces/claude-code/ingest"),
+            headers={
+                "Authorization": f"Bearer {token}",
+                "Content-Type": "application/json",
+            },
+            json=payload,
+            timeout=30,
+        )
+    except Exception as e:
+        return False, f"network error: {e}", None
+
+    if resp.status_code in (200, 201, 202):
+        mark_synced(traces)
+        try:
+            return True, "ok", resp.json()
+        except Exception:
+            return True, "ok", None
+    return False, f"{resp.status_code}: {resp.text[:200]}", None
 
 
 @click.group()
@@ -398,100 +515,83 @@ def _truncate(text: str, max_len: int = 200) -> str:
 
 @main.command()
 @click.option("--api-key", required=True, help="Your Pisama API key")
-@click.option("--api-url", default="https://api.pisama.ai", help="API base URL")
-@click.option("--auto-sync/--no-auto-sync", default=True, help="Enable auto-sync")
-def connect(api_key: str, api_url: str, auto_sync: bool):
-    """Connect to Pisama platform."""
+@click.option("--api-url", "api_url_opt", default=DEFAULT_API_URL, help="API base URL")
+@click.option("--auto-sync/--no-auto-sync", default=True, help="Auto-forward each session on Stop")
+def connect(api_key: str, api_url_opt: str, auto_sync: bool):
+    """Connect to Pisama platform (validates the key by exchanging it for a token)."""
     if httpx is None:
         click.echo("❌ httpx required. Run: pip install httpx")
         return
 
     click.echo("🔗 Connecting to Pisama platform...")
 
-    # Validate API key
-    try:
-        response = httpx.get(
-            f"{api_url}/v1/health",
-            headers={"Authorization": f"Bearer {api_key}"},
-            timeout=10,
-        )
-        if response.status_code == 401:
-            click.echo("❌ Invalid API key")
-            return
-    except httpx.ConnectError:
-        click.echo(f"⚠️  Could not reach {api_url} - saving config for later")
-
-    # Save config
     config = get_config()
     config["api_key"] = api_key
-    config["api_url"] = api_url
+    config["api_url"] = api_url_opt
     config["auto_sync"] = auto_sync
     config["connected_at"] = datetime.now(timezone.utc).isoformat()
+    # Drop any cached token so we re-exchange against the new key/url.
+    config.pop("jwt", None)
+    config.pop("jwt_exp", None)
     save_config(config)
 
+    # Validate by performing the real token exchange (also caches jwt + tenant).
+    token = get_jwt(config)
+    if token is None:
+        click.echo("⚠️  Saved config, but could not authenticate.")
+        click.echo("   Check the API key and --api-url, then try 'pisama-cc sync'.")
+        return
+
+    config = get_config()  # reload: get_jwt persisted tenant_id + token
     click.echo("✅ Connected to Pisama platform")
-    click.echo(f"   API URL: {api_url}")
+    click.echo(f"   API URL: {api_url_opt}")
+    if config.get("tenant_id"):
+        click.echo(f"   Tenant: {config['tenant_id']}")
     click.echo(f"   Auto-sync: {'enabled' if auto_sync else 'disabled'}")
 
-    click.echo("\n📡 You can now:")
-    click.echo("   pisama-cc sync      - Upload traces to platform")
-    click.echo("   pisama-cc analyze   - Run failure detection")
+    if auto_sync:
+        click.echo("\n📡 Every Claude Code session will now forward to Pisama on Stop.")
+        click.echo("   Manual flush anytime: pisama-cc sync")
+    else:
+        click.echo("\n📡 Auto-sync off. Upload manually with: pisama-cc sync")
 
 
 @main.command()
-@click.option("--last", default=100, help="Number of recent traces to sync")
-@click.option("--include-outputs/--no-outputs", default=False, help="Include tool outputs")
+@click.option("--last", default=200, help="Recency window (traces) used to pick sessions")
+@click.option("--include-outputs/--no-outputs", default=True, help="Include tool outputs (full content)")
 def sync(last: int, include_outputs: bool):
-    """Sync traces to Pisama platform."""
+    """Sync recent sessions to the Pisama platform (complete sessions, idempotent)."""
     if httpx is None:
         click.echo("❌ httpx required. Run: pip install httpx")
         return
 
     config = get_config()
-
     if not config.get("api_key"):
         click.echo("❌ Not connected. Run 'pisama-cc connect --api-key <key>' first")
         return
 
-    click.echo(f"📤 Syncing last {last} traces...")
+    # Identify the sessions seen in the recency window, newest first.
+    session_ids = []
+    seen = set()
+    for t in reversed(load_recent_traces(last)):
+        sid = t.get("session_id")
+        if sid and sid not in seen:
+            seen.add(sid)
+            session_ids.append(sid)
 
-    # Load traces
-    traces_list = load_recent_traces(last)
-    if not traces_list:
+    if not session_ids:
         click.echo("No traces found to sync")
         return
 
-    # Prepare payload (redact sensitive data)
-    payload = prepare_sync_payload(traces_list, include_outputs)
-
-    click.echo(f"   Found {len(traces_list)} traces")
-    click.echo(f"   Payload size: {len(json.dumps(payload)) // 1024} KB")
-
-    # Upload
-    try:
-        response = httpx.post(
-            f"{config['api_url']}/v1/traces/claude-code/ingest",
-            headers={
-                "Authorization": f"Bearer {config['api_key']}",
-                "Content-Type": "application/json",
-            },
-            json=payload,
-            timeout=30,
-        )
-
-        if response.status_code in (200, 201, 202):
-            result = response.json()
-            click.echo(f"✅ Synced {result.get('traces_received', len(traces_list))} traces")
-            click.echo(f"   View at: {config['api_url'].replace('api.', 'app.')}/traces")
-
-            # Mark as synced
-            mark_synced(traces_list)
-        else:
-            click.echo(f"❌ Sync failed: {response.status_code}")
-            click.echo(f"   {response.text[:200]}")
-    except httpx.ConnectError:
-        click.echo(f"❌ Could not connect to {config['api_url']}")
-        click.echo("   Traces saved locally, will retry on next sync")
+    click.echo(f"📤 Syncing {len(session_ids)} session(s)...")
+    ok, msg, result = push_sessions(config, session_ids, include_outputs)
+    if ok:
+        stored = (result or {}).get("traces_stored", "?")
+        click.echo(f"✅ Synced {stored} traces from {len(session_ids)} session(s)")
+        click.echo(f"   View at: {_dashboard_url(config)}")
+    else:
+        click.echo(f"❌ Sync failed: {msg}")
+        click.echo("   Traces remain saved locally.")
 
 
 @main.command()
@@ -1195,6 +1295,8 @@ def normalize_trace(t: dict) -> dict:
         "output_tokens": output_tokens,
         "cache_read_tokens": cache_read,
         "cost_usd": t.get("cost_usd", 0.0),
+        # Tool output (flat record) or output_data (legacy span record)
+        "tool_output": t.get("tool_output") if t.get("tool_output") is not None else t.get("output_data"),
         # Input/Reasoning/Output content
         "user_input": t.get("user_input"),
         "reasoning": t.get("reasoning"),
@@ -1230,6 +1332,50 @@ def load_recent_traces(n: int) -> list:
     return traces[-n:]
 
 
+def _all_traces(max_files: int = 7) -> list:
+    """Load and normalize traces from the most recent daily JSONL files."""
+    traces: list = []
+    if not TRACES_DIR.exists():
+        return traces
+    files = sorted(TRACES_DIR.glob("traces-*.jsonl"), reverse=True)[:max_files]
+    for tf in files:
+        try:
+            for line in tf.read_text().splitlines():
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    traces.append(normalize_trace(json.loads(line)))
+                except json.JSONDecodeError:
+                    continue
+        except OSError:
+            continue
+    return traces
+
+
+def _traces_for_sessions(session_ids) -> list:
+    """All captured traces belonging to any of `session_ids`, oldest first."""
+    wanted = {s for s in session_ids if s}
+    matched = [t for t in _all_traces() if t.get("session_id") in wanted]
+    matched.sort(key=lambda t: t.get("timestamp") or "")
+    return matched
+
+
+def _cap_field(value):
+    """Bound a forwarded field to MAX_FIELD_CHARS, keeping structure when small."""
+    if isinstance(value, str):
+        if len(value) <= MAX_FIELD_CHARS:
+            return value
+        return value[:MAX_FIELD_CHARS] + "...[truncated]"
+    try:
+        serialized = json.dumps(value)
+    except (TypeError, ValueError):
+        serialized = str(value)
+    if len(serialized) <= MAX_FIELD_CHARS:
+        return value
+    return serialized[:MAX_FIELD_CHARS] + "...[truncated]"
+
+
 def prepare_sync_payload(traces: list, include_outputs: bool) -> dict:
     """Prepare traces for sync, redacting sensitive data."""
     clean_traces = []
@@ -1257,11 +1403,11 @@ def prepare_sync_payload(traces: list, include_outputs: bool) -> dict:
         if isinstance(inp, dict):
             clean["tool_input"] = sanitize_input(inp)
 
-        # Optionally include tool output
+        # Optionally include tool output (full content, bounded per field).
         if include_outputs:
             out = t.get("tool_output")
-            if out and len(str(out)) < 1000:
-                clean["tool_output"] = out
+            if out is not None:
+                clean["tool_output"] = _cap_field(out)
 
         clean_traces.append(clean)
 
@@ -1286,9 +1432,9 @@ def sanitize_input(inp: dict) -> dict:
         # Anonymize file paths
         elif k in ("file_path", "path"):
             clean[k] = anonymize_path(str(v))
-        # Truncate large values
-        elif isinstance(v, str) and len(v) > 500:
-            clean[k] = v[:500] + "...[truncated]"
+        # Truncate only extremely large values (full content, bounded).
+        elif isinstance(v, str) and len(v) > MAX_FIELD_CHARS:
+            clean[k] = v[:MAX_FIELD_CHARS] + "...[truncated]"
         else:
             clean[k] = v
 
