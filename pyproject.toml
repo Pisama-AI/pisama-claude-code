@@ -70,13 +70,17 @@ otel = [
 lite = [
     "pyyaml>=6.0",
 ]
+proxy = [
+    "aiohttp>=3.9.0",
+]
 dev = [
     "pytest>=7.0.0",
     "pytest-asyncio>=0.21.0",
     "pytest-cov>=4.0.0",
+    "aiohttp>=3.9.0",
 ]
 all = [
-    "pisama-claude-code[core,otel,lite]",
+    "pisama-claude-code[core,otel,lite,proxy]",
 ]
 
 [project.scripts]

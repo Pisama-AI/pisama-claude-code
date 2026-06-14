@@ -36,6 +36,7 @@ import base64
 import click
 import json
 import gzip
+import sys
 import time
 from pathlib import Path
 from datetime import datetime, timezone
@@ -1460,6 +1461,140 @@ def mark_synced(traces: list):
                 "timestamp": t.get("timestamp"),
                 "session_id": t.get("session_id"),
             }) + "\n")
+
+
+# =============================================================================
+# PROXY COMMANDS - full-fidelity capture (reasoning + exact API payloads)
+# =============================================================================
+
+@main.group()
+def proxy():
+    """Full-fidelity capture via a logging reverse-proxy.
+
+    Claude Code strips extended-thinking text before it touches disk, so the
+    hook/transcript capture can't see reasoning. This proxy sits in front of the
+    Anthropic API and reassembles the full turn (incl. reasoning) from the live
+    response stream, plus the exact request payload.
+    """
+    pass
+
+
+def _proxy_module():
+    from pisama_claude_code import proxy as proxy_mod
+    return proxy_mod
+
+
+@proxy.command("serve")
+@click.option("--port", default=8788, help="Local port to listen on")
+@click.option("--upstream", default="https://api.anthropic.com", help="Upstream API base")
+@click.option("--forward/--no-forward", default=True, help="Also forward captures to Pisama")
+@click.option("--print-env/--no-print-env", default=True, help="Print the opt-in export line")
+def proxy_serve(port: int, upstream: str, forward: bool, print_env: bool):
+    """Run the logging proxy in the foreground (Ctrl+C to stop)."""
+    P = _proxy_module()
+    if P.web is None:
+        click.echo("❌ aiohttp required. Run: pip install 'pisama-claude-code[proxy]'")
+        return
+    if print_env:
+        click.echo("Route a single Claude Code session through the proxy:")
+        click.echo(f"   ANTHROPIC_BASE_URL=http://127.0.0.1:{port} claude")
+        click.echo("")
+    P.run_proxy(port=port, upstream=upstream, forward=forward)
+
+
+@proxy.command("install")
+@click.option("--port", default=8788, help="Local port for the proxy")
+@click.option("--always-on/--print-only", default=False,
+              help="Wire ANTHROPIC_BASE_URL globally + auto-start (launchd). Default just prints opt-in steps.")
+def proxy_install(port: int, always_on: bool):
+    """Set up the proxy: opt-in instructions, or always-on auto-start."""
+    import subprocess
+    P = _proxy_module()
+    if P.web is None:
+        click.echo("❌ aiohttp required. Run: pip install 'pisama-claude-code[proxy]'")
+        return
+
+    if not always_on:
+        click.echo("Opt-in (no global changes; deep-capture one session at a time):")
+        click.echo(f"   Terminal 1:  pisama-cc proxy serve --port {port}")
+        click.echo(f"   Terminal 2:  ANTHROPIC_BASE_URL=http://127.0.0.1:{port} claude")
+        click.echo("")
+        click.echo("Always-on (every session, auto-started):  pisama-cc proxy install --always-on")
+        return
+
+    if sys.platform != "darwin":
+        url = P.set_base_url(port)
+        click.echo(f"✅ Wrote ANTHROPIC_BASE_URL={url} to settings.json")
+        click.echo("   Auto-start (KeepAlive) is implemented for macOS/launchd only.")
+        click.echo(f"   Keep the proxy running yourself: pisama-cc proxy serve --port {port}")
+        click.echo("   ⚠️  If the proxy is not running, Claude Code cannot reach the API.")
+        return
+
+    P.PROXY_DIR.mkdir(parents=True, exist_ok=True)
+    P.LAUNCHD_PLIST.parent.mkdir(parents=True, exist_ok=True)
+    P.LAUNCHD_PLIST.write_text(P.launchd_plist_xml(port))
+    subprocess.run(["launchctl", "unload", str(P.LAUNCHD_PLIST)], capture_output=True)
+    res = subprocess.run(["launchctl", "load", "-w", str(P.LAUNCHD_PLIST)], capture_output=True, text=True)
+    if res.returncode != 0:
+        click.echo(f"❌ launchctl load failed: {res.stderr.strip()}")
+        click.echo(f"   Plist written to {P.LAUNCHD_PLIST}")
+        return
+    url = P.set_base_url(port)
+    click.echo(f"✅ Always-on proxy installed: {url} (launchd KeepAlive, auto-restarts)")
+    click.echo(f"   Plist: {P.LAUNCHD_PLIST}")
+    click.echo("   Every NEW Claude Code session now routes through Pisama capture.")
+    click.echo("   ⚠️  Subscription users: this proxies your OAuth token (ToS-sensitive).")
+    click.echo("   Revert anytime: pisama-cc proxy uninstall")
+
+
+@proxy.command("uninstall")
+def proxy_uninstall():
+    """Tear down always-on: unload launchd + remove ANTHROPIC_BASE_URL."""
+    import subprocess
+    P = _proxy_module()
+    if sys.platform == "darwin" and P.LAUNCHD_PLIST.exists():
+        subprocess.run(["launchctl", "unload", str(P.LAUNCHD_PLIST)], capture_output=True)
+        P.LAUNCHD_PLIST.unlink()
+        click.echo("Removed launchd agent")
+    if P.unset_base_url():
+        click.echo("Removed ANTHROPIC_BASE_URL from settings.json")
+    click.echo("Proxy disabled. Local captures in ~/.claude/pisama/proxy were preserved.")
+
+
+@proxy.command("status")
+@click.option("--port", default=8788)
+def proxy_status(port: int):
+    """Show proxy health, routing, and capture counts."""
+    P = _proxy_module()
+    # Health
+    health = "not running"
+    if httpx is not None:
+        try:
+            r = httpx.get(f"http://127.0.0.1:{port}/__pisama/health", timeout=2)
+            if r.status_code == 200:
+                health = f"running on :{port}"
+        except Exception:
+            pass
+    click.echo(f"Proxy:        {health}")
+    click.echo(f"Routing:      ANTHROPIC_BASE_URL = {P.configured_base_url() or '(not set)'}")
+    if sys.platform == "darwin":
+        click.echo(f"Auto-start:   {'installed' if P.LAUNCHD_PLIST.exists() else 'not installed'} (launchd)")
+    # Capture counts (today)
+    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    f = P.PROXY_DIR / f"calls-{today}.jsonl"
+    n = with_reasoning = 0
+    if f.exists():
+        for line in f.read_text().splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            n += 1
+            try:
+                if (json.loads(line).get("reasoning")):
+                    with_reasoning += 1
+            except ValueError:
+                pass
+    click.echo(f"Captured today: {n} calls ({with_reasoning} with reasoning) in {P.PROXY_DIR}")
 
 
 # =============================================================================
