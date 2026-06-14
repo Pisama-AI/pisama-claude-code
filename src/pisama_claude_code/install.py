@@ -104,7 +104,7 @@ def install(force: bool = False, auto_config: bool = True):
     print("  4. Run 'pisama-cc connect --api-key <key>' to unlock the apply-ready patch")
     print("\n" + "─" * 50)
     print("⭐ If this tool saves you time/money, consider starring:")
-    print("   https://github.com/tn-pisama/pisama-claude-code")
+    print("   https://github.com/Pisama-AI/pisama-claude-code")
 
 
 def _install_shell_hooks(hooks_dir: Path, force: bool):

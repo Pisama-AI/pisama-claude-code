@@ -27,6 +27,10 @@ full-fidelity reasoning capture, and tightens the privacy defaults.
   strings (API keys, JWTs, cloud tokens) are redacted from any content before it
   is forwarded. The optional `[core]` extra adds pisama-core's reversible vault.
 - **Auto-forward on session end** (`Stop` hook), idempotent per session.
+- **`/pisama-diagnose` skill** for Claude Code and Codex (first PyPI release).
+  Turns an agent trace into a root-cause diagnosis via `/atif/analyze`; with a
+  connected key it renders a ready-to-paste CLAUDE.md/.cursorrules guardrail and
+  can auto-apply a fix to a live n8n workflow. Installed by `pisama-cc install`.
 
 ### Changed
 - **Forwarding is now opt-in**: `connect` defaults to `--no-auto-sync`. Nothing
@@ -45,19 +49,11 @@ full-fidelity reasoning capture, and tightens the privacy defaults.
 - **Forwarding authenticates correctly.** Exchange the API key for a JWT and post
   to `/api/v1/...` (was sending the raw key to a `/v1/...` path → 401/404).
 
-## [0.4.3] - 2026-06-02
-
-### Added
-- **`/pisama-diagnose` skill** for Claude Code and Codex. Turns an agent trace
-  into a root-cause diagnosis via the public `/atif/analyze` endpoint. With a
-  connected key it also renders a ready-to-paste CLAUDE.md/.cursorrules guardrail
-  plus a verification command block (from `/healing/trigger/sync`), and can
-  auto-apply the fix to a live n8n workflow via `--apply`. Installed to
-  `~/.claude/skills` and `~/.codex/skills` by `pisama-cc install`.
+## [0.4.3] - 2026-04-19
 
 ### Fixed
-- Point the `connect` default API URL and dashboard links at `api.pisama.ai`
-  and `app.pisama.ai` (were the pre-rebrand `maotesting.com`).
+- Normalize "PISAMA" → "Pisama" in user-facing install/verify/uninstall output (environment variable names remain uppercase).
+- Update project metadata: description, maintainer email, and homepage URLs now use the canonical "Pisama" brand and `pisama.ai` domain.
 
 ## [0.4.0] - 2026-01-05
 
@@ -155,7 +151,9 @@ full-fidelity reasoning capture, and tightens the privacy defaults.
 - Support for Bash, Read, Write, Edit, Grep, Glob tools
 - Local storage in `~/.claude/pisama/traces/`
 
-[Unreleased]: https://github.com/tn-pisama/pisama-claude-code/compare/v0.4.0...HEAD
+[Unreleased]: https://github.com/tn-pisama/pisama-claude-code/compare/v0.5.0...HEAD
+[0.5.0]: https://github.com/tn-pisama/pisama-claude-code/compare/v0.4.3...v0.5.0
+[0.4.3]: https://github.com/tn-pisama/pisama-claude-code/compare/v0.4.0...v0.4.3
 [0.4.0]: https://github.com/tn-pisama/pisama-claude-code/compare/v0.3.5...v0.4.0
 [0.3.5]: https://github.com/tn-pisama/pisama-claude-code/compare/v0.3.4...v0.3.5
 [0.3.4]: https://github.com/tn-pisama/pisama-claude-code/compare/v0.3.3...v0.3.4
