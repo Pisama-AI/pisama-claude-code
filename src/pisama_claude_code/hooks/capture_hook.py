@@ -545,7 +545,8 @@ def _capture(hook_data: dict, hook_type: str) -> None:
             from pisama_claude_code.cli import emit_span, get_config
 
             cfg = get_config()
-            if cfg.get("api_key") and cfg.get("auto_sync", False):
+            excluded = cfg.get("forward_exclude_sessions") or []
+            if cfg.get("api_key") and cfg.get("auto_sync", False) and session_id not in excluded:
                 emit_span(
                     {
                         "session_id": session_id,

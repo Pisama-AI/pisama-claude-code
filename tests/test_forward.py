@@ -183,6 +183,27 @@ def test_emit_span_noops_when_auto_sync_off():
     assert "auto-sync" in msg
 
 
+def test_forward_hook_skips_excluded_session(tmp_path, monkeypatch):
+    """A session in forward_exclude_sessions must never be forwarded."""
+    traces_dir = tmp_path / "traces"
+    traces_dir.mkdir()
+    (traces_dir / "traces-2026-01-01.jsonl").write_text(
+        _record("secret-sess", "Bash", "OUT", "2026-01-01T00:00:01+00:00") + "\n"
+    )
+    monkeypatch.setattr(cli, "TRACES_DIR", traces_dir)
+    monkeypatch.setattr(cli, "CONFIG_FILE", tmp_path / "config.json")
+    monkeypatch.setattr(cli, "CONFIG_DIR", tmp_path)
+    cli.save_config({
+        "api_key": "pisama_x", "api_url": "http://localhost:8000",
+        "auto_sync": True, "tenant_id": "t-1",
+        "forward_exclude_sessions": ["secret-sess"],
+    })
+    monkeypatch.setattr(sys, "stdin", io.StringIO(json.dumps({"session_id": "secret-sess"})))
+    with patch.object(cli, "httpx") as mock_httpx:
+        forward_hook.main()
+        mock_httpx.post.assert_not_called()  # excluded -> nothing leaves
+
+
 def test_forward_command_toggles_auto_sync(tmp_path, monkeypatch):
     from click.testing import CliRunner
     monkeypatch.setattr(cli, "CONFIG_FILE", tmp_path / "config.json")

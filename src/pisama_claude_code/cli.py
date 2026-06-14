@@ -1145,7 +1145,13 @@ def status():
         connected_at = config_data.get("connected_at", "")
         if connected_at:
             click.echo(f"   Connected at: {connected_at[:19]}")
-        click.echo(f"   Auto-sync: {'enabled' if config_data.get('auto_sync') else 'disabled'}")
+        if config_data.get("auto_sync"):
+            click.echo(f"   📡 Real-time forwarding: ON — every session streams live to {config_data.get('api_url', 'the platform')}")
+        else:
+            click.echo("   📡 Real-time forwarding: OFF (capture is local-only) — enable with 'pisama-cc forward on'")
+        excluded = config_data.get("forward_exclude_sessions") or []
+        if excluded:
+            click.echo(f"   🚫 Excluded from forwarding: {len(excluded)} session(s)")
     else:
         click.echo("   ❌ Not connected")
         click.echo("   Run 'pisama-cc connect --api-key <key>'")

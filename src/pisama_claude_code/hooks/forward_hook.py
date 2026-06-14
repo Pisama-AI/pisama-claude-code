@@ -60,6 +60,9 @@ def main() -> None:
 
         sessions = [session_id] if session_id else _recent_session_ids(_all_traces())
         wanted = {s for s in sessions if s}
+        # Never forward sessions the user excluded (e.g. an automation session
+        # that handled secrets). See config.forward_exclude_sessions.
+        wanted -= set(config.get("forward_exclude_sessions") or [])
         if not wanted:
             return
 
