@@ -183,6 +183,31 @@ def test_emit_span_noops_when_auto_sync_off():
     assert "auto-sync" in msg
 
 
+def test_forward_command_toggles_auto_sync(tmp_path, monkeypatch):
+    from click.testing import CliRunner
+    monkeypatch.setattr(cli, "CONFIG_FILE", tmp_path / "config.json")
+    monkeypatch.setattr(cli, "CONFIG_DIR", tmp_path)
+    cli.save_config({"api_key": "pisama_x", "api_url": "https://api.pisama.ai", "auto_sync": False})
+
+    r = CliRunner().invoke(cli.main, ["forward", "on"])
+    assert r.exit_code == 0, r.output
+    assert cli.get_config()["auto_sync"] is True
+
+    r = CliRunner().invoke(cli.main, ["forward", "off"])
+    assert r.exit_code == 0, r.output
+    assert cli.get_config()["auto_sync"] is False
+
+
+def test_forward_command_requires_connection(tmp_path, monkeypatch):
+    from click.testing import CliRunner
+    monkeypatch.setattr(cli, "CONFIG_FILE", tmp_path / "config.json")
+    monkeypatch.setattr(cli, "CONFIG_DIR", tmp_path)
+    r = CliRunner().invoke(cli.main, ["forward", "on"])
+    assert r.exit_code == 0
+    assert "Not connected" in r.output
+    assert cli.get_config().get("auto_sync") in (None, False)
+
+
 def test_forward_hook_noops_when_not_connected(tmp_path, monkeypatch):
     monkeypatch.setattr(cli, "CONFIG_FILE", tmp_path / "config.json")
     monkeypatch.setattr(cli, "CONFIG_DIR", tmp_path)

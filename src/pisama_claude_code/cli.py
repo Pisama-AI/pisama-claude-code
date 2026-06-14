@@ -693,6 +693,30 @@ def connect(api_key: str, api_url_opt: str, auto_sync: bool):
 
 
 @main.command()
+@click.argument("state", type=click.Choice(["on", "off"]))
+def forward(state: str):
+    """Turn real-time forwarding on/off without re-entering your API key.
+
+    'on' streams every Claude Code session live to Pisama (one span per tool
+    call); 'off' keeps capture local-only. Run this in a FRESH terminal — flipping
+    it on from inside a session means that session's own captures start
+    forwarding too.
+    """
+    config = get_config()
+    if not config.get("api_key"):
+        click.echo("❌ Not connected. Run: pisama-cc connect --api-key <key> first.")
+        return
+    config["auto_sync"] = state == "on"
+    save_config(config)
+    if state == "on":
+        click.echo("✅ Real-time forwarding ENABLED.")
+        click.echo(f"   New Claude Code sessions stream live to {config.get('api_url') or DEFAULT_API_URL}")
+        click.echo("   (one appended span per tool call; reasoning via 'pisama-cc proxy serve').")
+    else:
+        click.echo("✅ Real-time forwarding disabled — capture stays local.")
+
+
+@main.command()
 @click.option("--last", default=200, help="Recency window (traces) used to pick sessions")
 @click.option("--include-outputs/--no-outputs", default=True, help="Include tool outputs (full content)")
 def sync(last: int, include_outputs: bool):
