@@ -1539,10 +1539,12 @@ def proxy_install(port: int, always_on: bool):
         click.echo(f"❌ launchctl load failed: {res.stderr.strip()}")
         click.echo(f"   Plist written to {P.LAUNCHD_PLIST}")
         return
-    url = P.set_base_url(port)
+    url = P.set_base_url(port)               # forward-compat (interactive may honor it)
+    profile = P.add_shell_export(port)       # the mechanism Claude Code actually honors
     click.echo(f"✅ Always-on proxy installed: {url} (launchd KeepAlive, auto-restarts)")
-    click.echo(f"   Plist: {P.LAUNCHD_PLIST}")
-    click.echo("   Every NEW Claude Code session now routes through Pisama capture.")
+    click.echo(f"   Plist:   {P.LAUNCHD_PLIST}")
+    click.echo(f"   Profile: {profile} (export ANTHROPIC_BASE_URL)")
+    click.echo("   → Open a NEW terminal (or `source ~/.zshrc`) so Claude Code picks it up.")
     click.echo("   ⚠️  Subscription users: this proxies your OAuth token (ToS-sensitive).")
     click.echo("   Revert anytime: pisama-cc proxy uninstall")
 
@@ -1558,6 +1560,8 @@ def proxy_uninstall():
         click.echo("Removed launchd agent")
     if P.unset_base_url():
         click.echo("Removed ANTHROPIC_BASE_URL from settings.json")
+    if P.remove_shell_export():
+        click.echo("Removed ANTHROPIC_BASE_URL export from ~/.zshrc (open a new terminal)")
     click.echo("Proxy disabled. Local captures in ~/.claude/pisama/proxy were preserved.")
 
 
@@ -1576,7 +1580,9 @@ def proxy_status(port: int):
         except Exception:
             pass
     click.echo(f"Proxy:        {health}")
-    click.echo(f"Routing:      ANTHROPIC_BASE_URL = {P.configured_base_url() or '(not set)'}")
+    click.echo(f"Routing:      settings.json env = {P.configured_base_url() or '(not set)'} (note: CC ignores this for base-url)")
+    shell_on = P.SHELL_PROFILE.exists() and P.SHELL_MARKER_BEGIN in P.SHELL_PROFILE.read_text()
+    click.echo(f"Shell export: {'~/.zshrc (active — the mechanism CC honors)' if shell_on else '(not set)'}")
     if sys.platform == "darwin":
         click.echo(f"Auto-start:   {'installed' if P.LAUNCHD_PLIST.exists() else 'not installed'} (launchd)")
     # Capture counts (today)

@@ -578,6 +578,42 @@ def configured_base_url(settings_path: Optional[Path] = None) -> Optional[str]:
         return None
 
 
+SHELL_PROFILE = Path.home() / ".zshrc"
+SHELL_MARKER_BEGIN = "# >>> pisama-cc proxy >>>"
+SHELL_MARKER_END = "# <<< pisama-cc proxy <<<"
+
+
+def _strip_shell_block(text: str) -> str:
+    import re
+    pattern = re.escape(SHELL_MARKER_BEGIN) + r".*?" + re.escape(SHELL_MARKER_END)
+    return re.sub(r"\n*" + pattern + r"\n*", "\n", text, flags=re.S)
+
+
+def add_shell_export(port: int, profile: Optional[Path] = None) -> Path:
+    """Export ANTHROPIC_BASE_URL from the shell profile (the mechanism Claude
+    Code actually honors; settings.json env is ignored for base-url routing).
+    New shells pick it up. Idempotent via a marker block."""
+    profile = profile or SHELL_PROFILE
+    url = f"http://127.0.0.1:{port}"
+    block = f"{SHELL_MARKER_BEGIN}\nexport ANTHROPIC_BASE_URL={url}  # route Claude Code through Pisama capture\n{SHELL_MARKER_END}\n"
+    text = profile.read_text() if profile.exists() else ""
+    text = _strip_shell_block(text).rstrip("\n")
+    profile.write_text((text + "\n\n" if text else "") + block)
+    return profile
+
+
+def remove_shell_export(profile: Optional[Path] = None) -> bool:
+    profile = profile or SHELL_PROFILE
+    if not profile.exists():
+        return False
+    text = profile.read_text()
+    new = _strip_shell_block(text)
+    if new != text:
+        profile.write_text(new)
+        return True
+    return False
+
+
 def launchd_plist_xml(port: int) -> str:
     pisama_cc = str(Path(sys.executable).with_name("pisama-cc"))
     log = str(PROXY_DIR / "proxy.log")

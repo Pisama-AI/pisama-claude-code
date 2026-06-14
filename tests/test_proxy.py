@@ -110,6 +110,29 @@ def test_set_and_unset_base_url(tmp_path):
     assert "ANTHROPIC_BASE_URL" not in json.loads(sp.read_text()).get("env", {})
 
 
+def test_shell_export_add_remove_idempotent(tmp_path):
+    prof = tmp_path / ".zshrc"
+    prof.write_text("export PATH=/usr/bin\n")
+
+    proxy.add_shell_export(8788, profile=prof)
+    txt = prof.read_text()
+    assert "export ANTHROPIC_BASE_URL=http://127.0.0.1:8788" in txt
+    assert proxy.SHELL_MARKER_BEGIN in txt
+    assert "export PATH=/usr/bin" in txt              # pre-existing content preserved
+
+    # re-install updates value without duplicating the block
+    proxy.add_shell_export(8799, profile=prof)
+    txt = prof.read_text()
+    assert txt.count(proxy.SHELL_MARKER_BEGIN) == 1
+    assert "8799" in txt and "8788" not in txt
+
+    assert proxy.remove_shell_export(profile=prof) is True
+    txt = prof.read_text()
+    assert proxy.SHELL_MARKER_BEGIN not in txt
+    assert "export PATH=/usr/bin" in txt              # still preserved
+    assert proxy.remove_shell_export(profile=prof) is False  # nothing left to remove
+
+
 def test_launchd_plist_has_keepalive_and_serve_args():
     xml = proxy.launchd_plist_xml(8788)
     assert "ai.pisama.cc-proxy" in xml
