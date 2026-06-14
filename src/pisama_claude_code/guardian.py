@@ -7,6 +7,7 @@ This is the main integration point for Claude Code hooks.
 import json
 import os
 import sys
+import tempfile
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -405,7 +406,7 @@ class Guardian:
         recommendation: str,
     ) -> None:
         """Write alert file for MCP/skill access."""
-        alert_path = Path("/tmp/pisama-alert.json")
+        alert_path = Path(tempfile.gettempdir()) / "pisama-alert.json"
         recent_spans = self.adapter.get_recent_spans(10)
 
         alert = {

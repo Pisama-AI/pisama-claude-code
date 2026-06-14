@@ -1,8 +1,16 @@
 """Tests for hook registration in install.py (corrected event names + shape)."""
 
 import json
+import sys
+
+import pytest
 
 import pisama_claude_code.install as install
+
+# The hook wrappers are bash (.sh) and rely on POSIX HOME + the executable bit,
+# so the full install+verify path is Unix-only. The pure settings.json reconciler
+# tests below run everywhere.
+_unix_only = pytest.mark.skipif(sys.platform == "win32", reason="bash hook wrappers are Unix-only")
 
 
 def _settings(claude_dir):
@@ -88,6 +96,7 @@ def test_update_settings_preserves_foreign_hooks(tmp_path):
     assert any("pisama-post.sh" in c for c in cmds)     # pisama hook added
 
 
+@_unix_only
 def test_full_install_then_verify(tmp_path, monkeypatch):
     monkeypatch.setenv("HOME", str(tmp_path))
 
@@ -100,6 +109,7 @@ def test_full_install_then_verify(tmp_path, monkeypatch):
         assert (hooks_dir / f).exists(), f
 
 
+@_unix_only
 def test_uninstall_strips_settings(tmp_path, monkeypatch):
     monkeypatch.setenv("HOME", str(tmp_path))
     install.install(force=True, auto_config=True)

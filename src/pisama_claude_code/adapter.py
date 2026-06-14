@@ -5,6 +5,7 @@ detection, and fix injection through Claude's hook and MCP systems.
 """
 
 import sys
+import tempfile
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -46,7 +47,7 @@ class ClaudeCodeAdapter(PlatformAdapter):
     ):
         self.pisama_dir = pisama_dir or (Path.home() / ".claude" / "pisama")
         self.traces_dir = self.pisama_dir / "traces"
-        self.alert_path = Path("/tmp/pisama-alert.json")
+        self.alert_path = Path(tempfile.gettempdir()) / "pisama-alert.json"
 
         self.converter = TraceConverter()
         self.storage = storage or TraceStorage(self.traces_dir)
