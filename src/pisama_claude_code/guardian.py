@@ -165,7 +165,7 @@ class Guardian:
 
         # Calculate severity
         if detection_results:
-            severity = self.scoring_engine.calculate(detection_results)
+            severity = self.scoring_engine.calculate_severity(detection_results)
             issues = []
             for result in detection_results:
                 if result.detected:

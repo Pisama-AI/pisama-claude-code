@@ -155,10 +155,13 @@ OTEL export uses [GenAI semantic conventions](https://opentelemetry.io/docs/spec
 | `pisama-cc usage` | Token usage breakdown (`--by-model`, `--by-tool`) |
 | `pisama-cc export` | Export to JSONL or OTEL (`--format otel`, `--compress`) |
 | `pisama-cc export-otel` | Export to OpenTelemetry collector (`-e ENDPOINT`) |
-| `pisama-cc connect` | Connect to Pisama platform (optional) |
+| `pisama-cc connect` | Connect to Pisama platform (forwarding is opt-in; add `--auto-sync` to forward every session) |
 | `pisama-cc sync` | Upload traces to platform |
 | `pisama-cc analyze` | Run failure detection (requires platform) |
-| `pisama-cc vault status` | Show PII tokenization vault status |
+| `pisama-cc proxy serve` | Run the opt-in reasoning proxy for a session (experimental) |
+| `pisama-cc proxy install --always-on` | Always-on reasoning capture (macOS launchd) |
+| `pisama-cc proxy status` / `uninstall` | Proxy health / teardown |
+| `pisama-cc vault status` | Show PII tokenization vault status (`[core]`) |
 
 ## Model Pricing
 
@@ -173,10 +176,17 @@ Supported models and pricing (per 1M tokens):
 
 ## Privacy & Security
 
-- **Local-first**: All traces stored in `~/.claude/pisama/traces/`
-- **Secrets redacted**: API keys, passwords, and tokens are automatically removed
-- **Paths anonymized**: Home directory paths replaced with `~`
-- **Platform sync is opt-in**: Nothing leaves your machine without explicit action
+- **Local-first**: all traces are stored in `~/.claude/pisama/traces/`.
+- **Forwarding is opt-in**: `connect` defaults to no auto-sync. Nothing leaves
+  your machine until you run `pisama-cc sync` or reconnect with `--auto-sync`.
+- **Secrets scrubbed by default**: credential-shaped strings (API keys, JWTs,
+  cloud tokens) are redacted from content before forwarding — no extras needed.
+  The optional `[core]` extra adds pisama-core's reversible keychain vault.
+- **Paths anonymized**: home-directory paths are replaced with `~`.
+- **Reasoning proxy is experimental + opt-in**: `pisama-cc proxy` routes API
+  traffic through a local logging proxy to recover extended-thinking. It defaults
+  to API-key usage. **Subscription (OAuth) users**: it handles your account token,
+  which is ToS-sensitive — use only knowingly.
 
 See [SECURITY.md](SECURITY.md) for our security policy.
 
@@ -187,16 +197,20 @@ After installation, the hooks are automatically configured. To customize, edit `
 ```json
 {
   "hooks": {
-    "PreToolCall": [
+    "PostToolUse": [
       {
-        "command": "~/.claude/hooks/pisama-pre.sh",
-        "timeout": 2000
+        "matcher": "*",
+        "hooks": [
+          { "type": "command", "command": "~/.claude/hooks/pisama-post.sh", "timeout": 10, "async": true }
+        ]
       }
     ],
-    "PostToolCall": [
+    "Stop": [
       {
-        "command": "~/.claude/hooks/pisama-post.sh",
-        "timeout": 2000
+        "matcher": "*",
+        "hooks": [
+          { "type": "command", "command": "~/.claude/hooks/pisama-forward.sh", "timeout": 30, "async": true }
+        ]
       }
     ]
   }

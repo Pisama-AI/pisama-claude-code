@@ -36,6 +36,7 @@ import base64
 import click
 import json
 import gzip
+import re
 import sys
 import time
 from pathlib import Path
@@ -188,7 +189,7 @@ def push_sessions(config: dict, session_ids, include_outputs: bool) -> tuple:
 
 
 @click.group()
-@click.version_option(version="0.4.3")
+@click.version_option(version="0.5.0")
 def main():
     """Pisama Claude Code - Trace capture and sync."""
     pass
@@ -517,7 +518,8 @@ def _truncate(text: str, max_len: int = 200) -> str:
 @main.command()
 @click.option("--api-key", required=True, help="Your Pisama API key")
 @click.option("--api-url", "api_url_opt", default=DEFAULT_API_URL, help="API base URL")
-@click.option("--auto-sync/--no-auto-sync", default=True, help="Auto-forward each session on Stop")
+@click.option("--auto-sync/--no-auto-sync", default=False,
+              help="Auto-forward each session on Stop (off by default; forwarding is opt-in)")
 def connect(api_key: str, api_url_opt: str, auto_sync: bool):
     """Connect to Pisama platform (validates the key by exchanging it for a token)."""
     if httpx is None:
@@ -554,7 +556,9 @@ def connect(api_key: str, api_url_opt: str, auto_sync: bool):
         click.echo("\n📡 Every Claude Code session will now forward to Pisama on Stop.")
         click.echo("   Manual flush anytime: pisama-cc sync")
     else:
-        click.echo("\n📡 Auto-sync off. Upload manually with: pisama-cc sync")
+        click.echo("\n📡 Forwarding is OFF (opt-in). Nothing leaves your machine until you either:")
+        click.echo("   • run 'pisama-cc sync' manually, or")
+        click.echo("   • reconnect with --auto-sync to forward every session automatically.")
 
 
 @main.command()
@@ -1362,16 +1366,46 @@ def _traces_for_sessions(session_ids) -> list:
     return matched
 
 
+# Built-in secret scrubber: redacts common credential shapes from any content
+# before it is forwarded to the platform. This runs by default on every install
+# (no extras, no keychain) so secrets never leave the machine un-scrubbed. The
+# optional [core] extra adds pisama-core's reversible keychain vault on top.
+_SECRET_PATTERNS = [re.compile(p) for p in [
+    r"sk-ant-[A-Za-z0-9_\-]{20,}",                         # Anthropic API keys
+    r"sk-[A-Za-z0-9]{20,}",                                # OpenAI-style keys
+    r"pisama_[A-Za-z0-9_\-]{20,}",                         # Pisama API keys
+    r"eyJ[A-Za-z0-9_\-]{8,}\.[A-Za-z0-9_\-]{8,}\.[A-Za-z0-9_\-]+",  # JWTs
+    r"gh[pousr]_[A-Za-z0-9]{20,}",                         # GitHub tokens
+    r"github_pat_[A-Za-z0-9_]{20,}",                       # GitHub fine-grained PATs
+    r"AKIA[0-9A-Z]{16}",                                   # AWS access key id
+    r"xox[baprs]-[A-Za-z0-9\-]{10,}",                      # Slack tokens
+    r"AIza[0-9A-Za-z_\-]{30,}",                            # Google API keys
+]]
+
+
+def _scrub_secrets(s: str) -> str:
+    """Replace credential-shaped substrings with [REDACTED]."""
+    if not isinstance(s, str) or not s:
+        return s
+    for pat in _SECRET_PATTERNS:
+        s = pat.sub("[REDACTED]", s)
+    return s
+
+
 def _cap_field(value):
-    """Bound a forwarded field to MAX_FIELD_CHARS, keeping structure when small."""
+    """Make a field safe to forward: scrub secrets + bound to MAX_FIELD_CHARS."""
     if isinstance(value, str):
-        if len(value) <= MAX_FIELD_CHARS:
-            return value
-        return value[:MAX_FIELD_CHARS] + "...[truncated]"
+        s = _scrub_secrets(value)
+        return s if len(s) <= MAX_FIELD_CHARS else s[:MAX_FIELD_CHARS] + "...[truncated]"
     try:
         serialized = json.dumps(value)
     except (TypeError, ValueError):
         serialized = str(value)
+    scrubbed = _scrub_secrets(serialized)
+    if scrubbed != serialized:
+        # Contained a secret; return the scrubbed (flattened) form rather than
+        # the original structure, so nothing sensitive slips through.
+        return scrubbed if len(scrubbed) <= MAX_FIELD_CHARS else scrubbed[:MAX_FIELD_CHARS] + "...[truncated]"
     if len(serialized) <= MAX_FIELD_CHARS:
         return value
     return serialized[:MAX_FIELD_CHARS] + "...[truncated]"
@@ -1393,10 +1427,10 @@ def prepare_sync_payload(traces: list, include_outputs: bool) -> dict:
             "input_tokens": t.get("input_tokens"),
             "output_tokens": t.get("output_tokens"),
             "cost_usd": t.get("cost_usd"),
-            # Input/Reasoning/Output content (PII already tokenized)
-            "user_input": t.get("user_input"),
-            "reasoning": t.get("reasoning"),
-            "ai_output": t.get("ai_output"),
+            # Input/Reasoning/Output content (secrets scrubbed + bounded)
+            "user_input": _cap_field(t.get("user_input")) if t.get("user_input") is not None else None,
+            "reasoning": _cap_field(t.get("reasoning")) if t.get("reasoning") is not None else None,
+            "ai_output": _cap_field(t.get("ai_output")) if t.get("ai_output") is not None else None,
         }
 
         # Sanitize tool input
@@ -1414,7 +1448,7 @@ def prepare_sync_payload(traces: list, include_outputs: bool) -> dict:
 
     return {
         "source": "claude-code",
-        "version": "0.4.3",
+        "version": "0.5.0",
         "uploaded_at": datetime.now(timezone.utc).isoformat(),
         "trace_count": len(clean_traces),
         "traces": clean_traces,
@@ -1422,20 +1456,21 @@ def prepare_sync_payload(traces: list, include_outputs: bool) -> dict:
 
 
 def sanitize_input(inp: dict) -> dict:
-    """Remove sensitive data from tool input."""
+    """Remove sensitive data from tool input (redact secret keys, scrub secret
+    values, anonymize paths, bound size)."""
     clean = {}
     sensitive_keys = {"api_key", "password", "secret", "token", "credential"}
 
     for k, v in inp.items():
-        # Skip sensitive keys
+        # Redact values under secret-named keys
         if any(s in k.lower() for s in sensitive_keys):
             clean[k] = "[REDACTED]"
         # Anonymize file paths
         elif k in ("file_path", "path"):
             clean[k] = anonymize_path(str(v))
-        # Truncate only extremely large values (full content, bounded).
-        elif isinstance(v, str) and len(v) > MAX_FIELD_CHARS:
-            clean[k] = v[:MAX_FIELD_CHARS] + "...[truncated]"
+        # Scrub credential-shaped substrings + bound size for string values
+        elif isinstance(v, str):
+            clean[k] = _cap_field(v)
         else:
             clean[k] = v
 

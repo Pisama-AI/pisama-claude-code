@@ -7,6 +7,44 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-06-14
+
+This release makes trace capture and forwarding actually work end to end (the
+prior installs registered hooks under invalid event names and never fired), adds
+full-fidelity reasoning capture, and tightens the privacy defaults.
+
+### Added
+- **Reasoning capture via an opt-in proxy** (`pisama-cc proxy`). A local logging
+  reverse-proxy (`ANTHROPIC_BASE_URL`) reassembles the full turn — including
+  extended-thinking *reasoning*, which Claude Code never writes to disk — plus the
+  exact request payload and token usage, from the live API response stream.
+  - `pisama-cc proxy serve` — opt-in, per session.
+  - `pisama-cc proxy install --always-on` — always-on, auto-started (macOS launchd).
+  - `pisama-cc proxy status` / `uninstall`.
+  - ⚠️ Experimental. Defaults to API-key usage. **Subscription (OAuth) users:** the
+    proxy handles your account token — ToS-sensitive; use knowingly.
+- **Built-in secret scrubbing**, on by default with no extras: credential-shaped
+  strings (API keys, JWTs, cloud tokens) are redacted from any content before it
+  is forwarded. The optional `[core]` extra adds pisama-core's reversible vault.
+- **Auto-forward on session end** (`Stop` hook), idempotent per session.
+
+### Changed
+- **Forwarding is now opt-in**: `connect` defaults to `--no-auto-sync`. Nothing
+  leaves your machine until you run `pisama-cc sync` or reconnect with
+  `--auto-sync`.
+- Full-content capture: user prompt, reasoning, AI output, tool I/O, tokens, cost.
+
+### Fixed
+- **Hooks now actually fire.** Register `PostToolUse` (capture) + `Stop` (forward)
+  with the correct nested settings shape and second-based timeouts (were the
+  invalid `PreToolCall`/`PostToolCall` events with ms timeouts). Installs from the
+  broken layout are migrated automatically.
+- **Capture records real content.** Read the tool result from
+  `tool_result`/`tool_response`, capture the user prompt and AI output reliably
+  across the whole turn (the prior parser missed both).
+- **Forwarding authenticates correctly.** Exchange the API key for a JWT and post
+  to `/api/v1/...` (was sending the raw key to a `/v1/...` path → 401/404).
+
 ## [0.4.3] - 2026-06-02
 
 ### Added

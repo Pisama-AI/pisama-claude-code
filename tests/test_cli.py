@@ -39,21 +39,22 @@ class TestCLI:
     """Tests for CLI commands."""
     
     def test_version(self):
-        """Test --version flag."""
+        """Test --version flag matches the package version."""
+        from pisama_claude_code import __version__
         runner = CliRunner()
         result = runner.invoke(main, ["--version"])
         assert result.exit_code == 0
-        assert "0.1.0" in result.output
-    
+        assert __version__ in result.output
+
     def test_help(self):
         """Test --help flag."""
         runner = CliRunner()
         result = runner.invoke(main, ["--help"])
         assert result.exit_code == 0
-        assert "PISAMA Claude Code" in result.output
+        assert "Pisama Claude Code" in result.output
         assert "connect" in result.output
         assert "sync" in result.output
-        assert "analyze" in result.output
+        assert "proxy" in result.output
     
     def test_status_not_connected(self, tmp_path):
         """Test status when not connected."""
@@ -179,44 +180,59 @@ class TestPrivacy:
         assert len(result["content"]) <= MAX_FIELD_CHARS + len("...[truncated]")
         assert "[truncated]" in result["content"]
 
+    def test_scrub_secrets_patterns(self):
+        """The built-in scrubber redacts common credential shapes."""
+        from pisama_claude_code.cli import _scrub_secrets
+        cases = [
+            "sk-ant-api03-" + "A" * 40,
+            "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0In0.abcDEFghiJKLmnoPQR",
+            "pisama_" + "B" * 40,
+            "ghp_" + "C" * 36,
+            "AKIA" + "D" * 16,
+        ]
+        for secret in cases:
+            out = _scrub_secrets(f"value is {secret} end")
+            assert secret not in out and "[REDACTED]" in out, secret
+
+    def test_forward_payload_scrubs_content(self):
+        """prepare_sync_payload scrubs secrets from forwarded content fields."""
+        from pisama_claude_code.cli import prepare_sync_payload
+        secret = "sk-ant-api03-" + "Z" * 40
+        traces = [{
+            "session_id": "s", "tool_name": "Bash",
+            "user_input": f"my key {secret}",
+            "reasoning": "none", "ai_output": "ok",
+            "tool_input": {"command": f"export KEY={secret}"},
+            "tool_output": f"printed {secret}",
+        }]
+        payload = prepare_sync_payload(traces, include_outputs=True)
+        blob = json.dumps(payload)
+        assert secret not in blob and "[REDACTED]" in blob
+
 
 class TestDetection:
-    """Tests for failure detection."""
-    
-    def test_run_detection_empty_traces(self):
-        """Test detection with no traces."""
-        from pisama_claude_code.cli import run_detection
-        
-        results = run_detection([])
-        
-        assert "F4_tool_misuse" in results
-        assert "F6_loop" in results
-        assert results["F4_tool_misuse"]["detected"] is False
-    
-    def test_run_detection_finds_tool_misuse(self):
-        """Test detection finds Bash used for file reading."""
-        from pisama_claude_code.cli import run_detection
-        
-        traces = [
-            {"tool_name": "Bash", "tool_input": {"command": "cat /etc/passwd"}},
-            {"tool_name": "Bash", "tool_input": {"command": "head -10 file.txt"}},
-        ]
-        
-        results = run_detection(traces)
-        
-        assert results["F4_tool_misuse"]["detected"] is True
-    
-    def test_run_detection_finds_loops(self):
-        """Test detection finds consecutive repeated calls."""
-        from pisama_claude_code.cli import run_detection
-        
-        # Create 15 consecutive Bash calls
-        traces = [{"tool_name": "Bash", "tool_input": {}} for _ in range(15)]
-        
-        results = run_detection(traces)
-        
-        assert results["F6_loop"]["detected"] is True
-        assert "14" in results["F6_loop"]["explanation"]  # 14 repeats
+    """Tests for local (offline) detection via _run_local_detection.
+
+    _run_local_detection returns a LIST of detection dicts and currently covers
+    tool-loop detection (identical consecutive calls)."""
+
+    def test_empty_traces_no_detections(self):
+        from pisama_claude_code.cli import _run_local_detection
+        assert _run_local_detection([]) == []
+
+    def test_finds_tool_loop(self):
+        from pisama_claude_code.cli import _run_local_detection
+        traces = [{"tool_name": "Bash", "tool_input": {"command": "ls"}} for _ in range(15)]
+        results = _run_local_detection(traces)
+        loops = [d for d in results if "loop" in d.get("type", "").lower()]
+        assert loops, "expected a loop detection"
+        assert loops[0]["details"]["repetition_count"] >= 3
+
+    def test_no_loop_for_varied_calls(self):
+        from pisama_claude_code.cli import _run_local_detection
+        traces = [{"tool_name": "Bash", "tool_input": {"command": f"echo {i}"}} for i in range(15)]
+        results = _run_local_detection(traces)
+        assert not [d for d in results if "loop" in d.get("type", "").lower()]
 
 
 if __name__ == "__main__":
