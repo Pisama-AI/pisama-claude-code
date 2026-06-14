@@ -266,6 +266,15 @@ def emit_span(trace: dict, config: Optional[dict] = None) -> tuple:
     token = get_jwt(config)
     if not token:
         return False, "authentication failed"
+    # The OTLP ingest needs the tenant. Use the tenant-scoped path
+    # (/tenants/{tid}/traces/ingest) — the "keyless" /traces/ingest alias still
+    # requires a ?tenant_id= query param in prod, so the explicit path is the
+    # robust choice and keeps the tenant id out of the query string. get_jwt
+    # populates config["tenant_id"] from the token payload.
+    tenant_id = config.get("tenant_id")
+    ingest_path = (
+        f"/tenants/{tenant_id}/traces/ingest" if tenant_id else "/traces/ingest"
+    )
 
     from pisama_claude_code.otel_export import convert_trace_to_otel_dict
 
@@ -296,7 +305,7 @@ def emit_span(trace: dict, config: Optional[dict] = None) -> tuple:
     }
     try:
         resp = httpx.post(
-            api_url(config, "/traces/ingest"),
+            api_url(config, ingest_path),
             headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
             json=payload,
             timeout=15,
@@ -310,7 +319,7 @@ def emit_span(trace: dict, config: Optional[dict] = None) -> tuple:
 
 
 @click.group()
-@click.version_option(version="0.6.0")
+@click.version_option(version="0.6.1")
 def main():
     """Pisama Claude Code - Trace capture and sync."""
     pass

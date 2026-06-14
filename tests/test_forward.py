@@ -161,8 +161,9 @@ def test_emit_span_appends_single_otlp_span_with_reasoning(tmp_path, monkeypatch
         )
 
     assert ok, msg
-    # Append endpoint, not the batch one.
-    assert captured["url"].endswith("/api/v1/traces/ingest")
+    # Tenant-scoped append endpoint (tenant from the JWT payload), NOT the batch
+    # claude-code endpoint and NOT the bare keyless path (which needs ?tenant_id).
+    assert captured["url"].endswith("/api/v1/tenants/t-1/traces/ingest")
     span = captured["json"]["resourceSpans"][0]["scopeSpans"][0]["spans"][0]
     state_attr = next(a for a in span["attributes"] if a["key"] == "gen_ai.state")
     state = json.loads(state_attr["value"]["stringValue"])
@@ -223,10 +224,11 @@ def test_forward_hook_forwards_when_connected(tmp_path, monkeypatch):
         mock_httpx.post.side_effect = fake_post
         forward_hook.main()
 
-    # Real-time reconcile now appends single OTLP spans to /traces/ingest, NOT
-    # the old delete-and-replace claude-code batch endpoint.
-    ingests = [(u, j) for (u, j) in posted if u.endswith("/api/v1/traces/ingest")]
+    # Real-time reconcile now appends single OTLP spans to the tenant-scoped
+    # ingest, NOT the old delete-and-replace claude-code batch endpoint.
+    ingests = [(u, j) for (u, j) in posted if u.endswith("/traces/ingest")]
     assert ingests, posted
+    assert all("/tenants/" in u for (u, _) in ingests), ingests
     assert not any(u.endswith("/traces/claude-code/ingest") for (u, _) in posted)
     # OTLP shape + reasoning/content rides in gen_ai.state.
     _, payload = ingests[0]

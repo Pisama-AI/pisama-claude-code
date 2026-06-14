@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.1] - 2026-06-14
+
+### Fixed
+- `emit_span()` now posts to the tenant-scoped ingest
+  (`/api/v1/tenants/{tenant_id}/traces/ingest`, tenant from the JWT payload)
+  instead of the bare `/api/v1/traces/ingest`. The "keyless" alias still requires
+  a `?tenant_id=` query param server-side, so real-time forwarding 422'd against
+  the live platform (the mocked unit tests didn't catch it; an end-to-end run
+  against prod did). Verified live: ingest 202 + a `trace.span` event delivered
+  over the `/traces/live` SSE stream.
+
 ## [0.6.0] - 2026-06-14
 
 Real-time trace collection. Forwarding now streams one small appended span per
