@@ -155,6 +155,7 @@ def test_cli_proxy_status_runs(monkeypatch, tmp_path):
     from pisama_claude_code.cli import main
     monkeypatch.setattr(proxy, "PROXY_DIR", tmp_path)
     monkeypatch.setattr(proxy, "SETTINGS_PATH", tmp_path / "settings.json")
+    monkeypatch.setattr(proxy, "SHELL_PROFILE", tmp_path / ".zshrc")  # never read real profile
     r = CliRunner().invoke(main, ["proxy", "status", "--port", "1"])  # nothing on :1
     assert r.exit_code == 0
     assert "Proxy:" in r.output and "Routing:" in r.output
@@ -163,8 +164,10 @@ def test_cli_proxy_status_runs(monkeypatch, tmp_path):
 def test_cli_proxy_uninstall_hermetic(monkeypatch, tmp_path):
     from click.testing import CliRunner
     from pisama_claude_code.cli import main
+    # Fully sandbox every path uninstall touches - must NOT mutate real ~/.zshrc etc.
     monkeypatch.setattr(proxy, "SETTINGS_PATH", tmp_path / "settings.json")
     monkeypatch.setattr(proxy, "LAUNCHD_PLIST", tmp_path / "agent.plist")
+    monkeypatch.setattr(proxy, "SHELL_PROFILE", tmp_path / ".zshrc")
     r = CliRunner().invoke(main, ["proxy", "uninstall"])
     assert r.exit_code == 0
     assert "disabled" in r.output.lower()
