@@ -290,7 +290,10 @@ def emit_span(trace: dict, config: Optional[dict] = None) -> tuple:
                 "resource": {
                     "attributes": [
                         {"key": "service.name", "value": {"stringValue": "claude-code"}},
-                        {"key": "pisama.harness.type", "value": {"stringValue": "claude_code"}},
+                        # Explicit framework so the backend groups these under
+                        # "claude-code" instead of auto-detecting the provider
+                        # ("anthropic") from gen_ai.system.
+                        {"key": "pisama.framework", "value": {"stringValue": "claude-code"}},
                         {"key": "session.id", "value": {"stringValue": session_id}},
                     ]
                 },
