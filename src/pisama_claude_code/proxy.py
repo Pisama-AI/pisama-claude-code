@@ -381,24 +381,54 @@ def _forward_request_headers(headers) -> Dict[str, str]:
     return {k: v for k, v in headers.items() if k.lower() not in _HOP_BY_HOP}
 
 
-def _capture(parsed_req, body_resp, content_type, *, status, duration_ms, forward):
+def _capture(parsed_req, body_resp, content_type, *, status, duration_ms, forward,
+             path=None, content_encoding=None):
     """Best-effort: reassemble, store, and (optionally) schedule a forward.
 
     Never raises into the request path; callers wrap in try/except too."""
+    raw = _maybe_decompress(bytes(body_resp), content_encoding)
     ct = (content_type or "").lower()
     if "text/event-stream" in ct:
-        summary = reassemble_sse(bytes(body_resp))
+        summary = reassemble_sse(raw)
     elif "application/json" in ct:
-        summary = parse_json_response(bytes(body_resp))
+        summary = parse_json_response(raw)
     else:
-        return None
+        summary = {}
     record = build_record(
         parsed_req, summary,
         timestamp=datetime.now(timezone.utc).isoformat(),
         status=status, duration_ms=duration_ms,
     )
+    record["path"] = path
+    if status >= 400:
+        try:
+            record["error"] = raw.decode("utf-8", "replace")[:500]
+        except Exception:
+            record["error"] = None
     store_record(record)
     return record
+
+
+def _maybe_decompress(raw: bytes, encoding: Optional[str]) -> bytes:
+    """Decompress a teed body if it carries a Content-Encoding we understand.
+
+    We force identity upstream, so this is a belt-and-suspenders fallback for
+    gzip/deflate. Unknown encodings (br/zstd) are returned as-is (capture is
+    best-effort and will simply find nothing to parse)."""
+    enc = (encoding or "").lower().strip()
+    try:
+        if enc == "gzip":
+            import gzip as _gz
+            return _gz.decompress(raw)
+        if enc == "deflate":
+            import zlib
+            try:
+                return zlib.decompress(raw)
+            except zlib.error:
+                return zlib.decompress(raw, -zlib.MAX_WBITS)
+    except Exception:
+        return raw
+    return raw
 
 
 def make_app(upstream: str = DEFAULT_UPSTREAM, forward: bool = True):
@@ -412,6 +442,10 @@ def make_app(upstream: str = DEFAULT_UPSTREAM, forward: bool = True):
         body = await request.read()
         url = upstream.rstrip("/") + request.rel_url.raw_path_qs
         fwd_headers = _forward_request_headers(request.headers)
+        # Force an uncompressed response so the teed copy is parseable. The client
+        # always accepts identity, and on localhost<->API the bandwidth cost is nil.
+        fwd_headers = {k: v for k, v in fwd_headers.items() if k.lower() != "accept-encoding"}
+        fwd_headers["Accept-Encoding"] = "identity"
         is_messages = request.method == "POST" and request.path.endswith("/v1/messages")
         parsed_req = parse_request(body) if is_messages else {}
         started = _time.monotonic()
@@ -446,6 +480,8 @@ def make_app(upstream: str = DEFAULT_UPSTREAM, forward: bool = True):
                     status=upstream_resp.status,
                     duration_ms=int((_time.monotonic() - started) * 1000),
                     forward=forward,
+                    path=request.path,
+                    content_encoding=upstream_resp.headers.get("Content-Encoding"),
                 )
                 if record and forward:
                     import asyncio
