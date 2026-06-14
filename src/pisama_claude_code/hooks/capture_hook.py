@@ -184,15 +184,44 @@ def extract_content_parts(content_blocks: list) -> dict:
     }
 
 
-def get_last_user_message(transcript_path: str) -> dict:
-    """Read transcript and get the last user text message (input).
+def _user_text_from_entry(entry: dict) -> "str | None":
+    """Return the real user text from a transcript 'user' entry.
 
-    Note: Claude Code "user" messages can be either:
-    1. Actual user text input (content is a string or has type="text" blocks)
-    2. Tool results (content has type="tool_result" blocks)
-
-    We want the actual user input, not tool results.
+    Claude Code "user" entries are either actual user input or tool results /
+    system interrupts. Returns the user's text, or None if the entry is a tool
+    result / system message / interrupt (i.e. not real user input).
     """
+    if not isinstance(entry, dict) or entry.get("type") not in ("user", "human"):
+        return None
+    msg = entry.get("message")
+    if not isinstance(msg, dict):
+        return None
+    content = msg.get("content", [])
+
+    if isinstance(content, str):
+        if content.startswith("[Request") or content.startswith("[System"):
+            return None
+        return content or None
+
+    if isinstance(content, list):
+        parts = []
+        for block in content:
+            if isinstance(block, dict):
+                btype = block.get("type", "")
+                if btype == "tool_result":
+                    return None  # tool result, not user input
+                if btype == "text":
+                    text = block.get("text", "")
+                    if text and not text.startswith("[Request"):
+                        parts.append(text)
+            elif isinstance(block, str):
+                parts.append(block)
+        return "\n".join(parts) if parts else None
+    return None
+
+
+def get_last_user_message(transcript_path: str) -> dict:
+    """Read transcript and get the last real user text message (input)."""
     try:
         from pathlib import Path
         transcript = Path(transcript_path)
@@ -200,49 +229,16 @@ def get_last_user_message(transcript_path: str) -> dict:
             return {}
 
         with open(transcript) as f:
-            lines = f.readlines()[-200:]  # Look back further for user message
+            lines = f.readlines()[-800:]  # cover long turns (many tool calls)
 
         for line in reversed(lines):
             try:
                 entry = json.loads(line)
-                # Claude Code uses "user" type
-                if entry.get("type") in ("user", "human") and "message" in entry:
-                    msg = entry["message"]
-                    content = msg.get("content", [])
-
-                    # Content can be a direct string (actual user input)
-                    if isinstance(content, str):
-                        # Skip system messages and interrupts
-                        if not content.startswith("[Request") and not content.startswith("[System"):
-                            return {"content": content, "role": "user"}
-
-                    # Content can be a list of blocks
-                    elif isinstance(content, list):
-                        text_parts = []
-                        is_tool_result = False
-
-                        for block in content:
-                            if isinstance(block, dict):
-                                block_type = block.get("type", "")
-                                if block_type == "tool_result":
-                                    is_tool_result = True
-                                    break  # This is a tool result, not user input
-                                elif block_type == "text":
-                                    text = block.get("text", "")
-                                    if text and not text.startswith("[Request"):
-                                        text_parts.append(text)
-                            elif isinstance(block, str):
-                                text_parts.append(block)
-
-                        # Only return if this is actual user text, not tool results
-                        if text_parts and not is_tool_result:
-                            return {
-                                "content": "\n".join(text_parts),
-                                "role": "user",
-                            }
-
             except json.JSONDecodeError:
                 continue
+            text = _user_text_from_entry(entry)
+            if text is not None:
+                return {"content": text, "role": "user"}
         return {}
     except Exception:
         return {}
@@ -268,56 +264,60 @@ def get_last_assistant_message(transcript_path: str) -> dict:
         if not transcript.exists():
             return {}
 
-        # Read last 100 lines to find messages
+        # Read a wide window so a long turn's opening thinking block (which can
+        # sit many tool calls back) is still in view.
         with open(transcript) as f:
-            lines = f.readlines()[-100:]
+            lines = f.readlines()[-800:]
 
-        # Collect content from recent assistant messages (up to 10)
-        # Claude Code sends thinking, text, tool_use as separate messages
+        # Collect every assistant content block in the CURRENT turn. Claude Code
+        # emits thinking, text and tool_use as separate assistant entries, and a
+        # turn ends (going backwards) at the real user text message.
         all_reasoning = []
         all_output = []
         all_tool_calls = []
         model = None
         usage = {}
         stop_reason = None
-        messages_checked = 0
-        max_messages = 10
+        user_input = None
+        asst_seen = 0
 
         for line in reversed(lines):
-            if messages_checked >= max_messages:
-                break
             try:
                 entry = json.loads(line)
-                if entry.get("type") == "assistant" and "message" in entry:
-                    messages_checked += 1
-                    msg = entry["message"]
-
-                    # Get model and usage from first (most recent) message
-                    if model is None:
-                        model = msg.get("model")
-                        usage = msg.get("usage", {})
-                        stop_reason = msg.get("stop_reason")
-
-                    # Extract content from this message
-                    content = msg.get("content", [])
-                    if isinstance(content, list):
-                        parts = extract_content_parts(content)
-                        if parts.get("reasoning", {}).get("content"):
-                            all_reasoning.append(parts["reasoning"]["content"])
-                        if parts.get("output", {}).get("content"):
-                            all_output.append(parts["output"]["content"])
-                        if parts.get("tool_calls"):
-                            all_tool_calls.extend(parts["tool_calls"])
-
-                # Stop if we hit a user message (different turn)
-                elif entry.get("type") == "human":
-                    break
-
             except json.JSONDecodeError:
                 continue
 
-        # Get user input
-        user_msg = get_last_user_message(transcript_path)
+            if entry.get("type") == "assistant" and isinstance(entry.get("message"), dict):
+                asst_seen += 1
+                if asst_seen > 400:  # pathological-turn safety bound
+                    break
+                msg = entry["message"]
+                if model is None:
+                    model = msg.get("model")
+                # Usage from the most recent assistant entry that carries it.
+                if not usage and isinstance(msg.get("usage"), dict):
+                    usage = msg["usage"]
+                    stop_reason = msg.get("stop_reason")
+                content = msg.get("content", [])
+                if isinstance(content, list):
+                    parts = extract_content_parts(content)
+                    if parts.get("reasoning", {}).get("content"):
+                        all_reasoning.append(parts["reasoning"]["content"])
+                    if parts.get("output", {}).get("content"):
+                        all_output.append(parts["output"]["content"])
+                    if parts.get("tool_calls"):
+                        all_tool_calls.extend(parts["tool_calls"])
+                continue
+
+            # A real user text message marks the start of this turn.
+            text = _user_text_from_entry(entry)
+            if text is not None:
+                user_input = text
+                break
+
+        # If the turn boundary fell outside the window, fall back to a scan.
+        if user_input is None:
+            user_input = get_last_user_message(transcript_path).get("content")
 
         # Combine collected content (reverse to get chronological order)
         reasoning_text = "\n\n".join(reversed(all_reasoning)) if all_reasoning else None
@@ -328,7 +328,7 @@ def get_last_assistant_message(transcript_path: str) -> dict:
             "usage": usage,
             "stop_reason": stop_reason,
             # Structured content
-            "input": user_msg.get("content"),
+            "input": user_input,
             "reasoning": reasoning_text,
             "output": output_text,
             "tool_calls": all_tool_calls if all_tool_calls else None,
