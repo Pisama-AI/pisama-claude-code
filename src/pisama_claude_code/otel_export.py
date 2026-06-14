@@ -5,6 +5,7 @@ to any OTEL-compatible backend (Jaeger, Honeycomb, Datadog, etc.).
 """
 
 from __future__ import annotations
+
 import json
 import time
 from datetime import datetime
@@ -49,11 +50,11 @@ def export_traces_to_otel(
         )
 
     from opentelemetry import trace as otel_trace
-    from opentelemetry.sdk.trace import TracerProvider
-    from opentelemetry.sdk.trace.export import BatchSpanProcessor
     from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
     from opentelemetry.sdk.resources import Resource
-    from opentelemetry.trace import SpanKind, Status, StatusCode
+    from opentelemetry.sdk.trace import TracerProvider
+    from opentelemetry.sdk.trace.export import BatchSpanProcessor
+    from opentelemetry.trace import SpanKind
 
     # Set up resource
     resource = Resource.create({
@@ -90,7 +91,6 @@ def export_traces_to_otel(
 
         # Create parent span for session
         session_start = _parse_timestamp(session_traces[0].get("timestamp"))
-        session_end = _parse_timestamp(session_traces[-1].get("timestamp"))
 
         with tracer.start_span(
             name=f"claude-code-session:{session_id}",

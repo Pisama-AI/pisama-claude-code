@@ -13,15 +13,13 @@ from pathlib import Path
 from typing import Any, Optional
 
 from pisama_core.audit import AuditLogger
-from pisama_core.config import load_config, PisamaConfig
-from pisama_core.detection import DetectorRegistry, DetectionOrchestrator
+from pisama_core.detection import DetectionOrchestrator
 from pisama_core.healing import HealingEngine
 from pisama_core.injection import EnforcementEngine, EnforcementLevel
 from pisama_core.scoring import ScoringEngine
 from pisama_core.traces import Trace
 
 from pisama_claude_code.adapter import ClaudeCodeAdapter
-from pisama_claude_code.storage import TraceStorage
 
 
 @dataclass

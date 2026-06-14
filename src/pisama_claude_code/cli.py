@@ -33,15 +33,16 @@ OTEL Export:
 """
 
 import base64
-import click
-import json
 import gzip
+import json
 import re
 import sys
 import time
-from pathlib import Path
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Optional
+
+import click
 
 try:
     import httpx
@@ -222,8 +223,9 @@ def verify():
 
     Exit code 0 if all checks pass, 1 otherwise.
     """
-    from pisama_claude_code.install import verify as do_verify
     import sys
+
+    from pisama_claude_code.install import verify as do_verify
     success = do_verify()
     sys.exit(0 if success else 1)
 
@@ -248,7 +250,6 @@ def demo(verbose: bool):
         pisama-cc demo           # Quick demo
         pisama-cc demo -v        # Verbose with details
     """
-    import importlib.resources
 
     click.echo("")
     click.echo("🚀 Pisama Demo - Instant Failure Detection")
@@ -380,7 +381,6 @@ def _run_local_detection(traces: list) -> list:
         consecutive_same = 1
         max_consecutive = 1
         repeated_tool = None
-        repeated_input = None
 
         for i in range(1, len(tool_calls)):
             if tool_calls[i] == tool_calls[i - 1]:
@@ -388,7 +388,6 @@ def _run_local_detection(traces: list) -> list:
                 if consecutive_same > max_consecutive:
                     max_consecutive = consecutive_same
                     repeated_tool = tool_calls[i][0]
-                    repeated_input = tool_calls[i][1]
             else:
                 consecutive_same = 1
 
@@ -1213,7 +1212,7 @@ def export_otel(last: int, endpoint: str, service_name: str, header: tuple):
       pisama-cc export-otel -e http://localhost:4318/v1/traces \\
           -s my-claude-agent
     """
-    from pisama_claude_code.otel_export import is_otel_available, export_traces_to_otel
+    from pisama_claude_code.otel_export import export_traces_to_otel, is_otel_available
 
     if not is_otel_available():
         click.echo("❌ OpenTelemetry not installed")
@@ -1652,7 +1651,7 @@ def vault():
 def vault_status():
     """Show vault status and statistics."""
     try:
-        from pisama_core.tokenization import TokenVault, KeychainManager
+        from pisama_core.tokenization import KeychainManager, TokenVault
     except ImportError:
         click.echo("❌ pisama-core not installed or tokenization not available")
         click.echo("   Install with: pip install pisama-core[tokenization]")
@@ -1729,7 +1728,7 @@ def vault_status():
 def vault_lookup(token: str, reason: str, ticket: Optional[str]):
     """Look up a token to reveal original value (with audit logging)."""
     try:
-        from pisama_core.tokenization import TokenVault, KeychainManager, TokenParser
+        from pisama_core.tokenization import KeychainManager, TokenParser, TokenVault
     except ImportError:
         click.echo("❌ pisama-core not installed")
         return
@@ -1857,7 +1856,7 @@ def vault_delete(
 def vault_health():
     """Check vault health and integrity."""
     try:
-        from pisama_core.tokenization import TokenVault, KeychainManager
+        from pisama_core.tokenization import KeychainManager
     except ImportError:
         click.echo("❌ pisama-core not installed")
         return
@@ -2001,7 +2000,7 @@ def vault_vacuum():
     size_after = vault_path.stat().st_size
     saved = size_before - size_after
 
-    click.echo(f"✅ Vault compacted")
+    click.echo("✅ Vault compacted")
     click.echo(f"   Before: {size_before // 1024} KB")
     click.echo(f"   After:  {size_after // 1024} KB")
     click.echo(f"   Saved:  {saved // 1024} KB")
@@ -2146,7 +2145,7 @@ def lite_init(
         pisama-cc lite init --severity-threshold 60
     """
     try:
-        from .lite_config import LiteConfig, DEFAULT_CONFIG_DIR, DEFAULT_CONFIG_PATH
+        from .lite_config import DEFAULT_CONFIG_DIR, DEFAULT_CONFIG_PATH, LiteConfig
     except ImportError:
         click.echo("Error: lite mode modules not available")
         return
@@ -2420,7 +2419,7 @@ def lite_export(output: str, fmt: str):
     if count > 0 and config.platform_url:
         click.echo("To import into Pisama platform:")
         click.echo(f"   curl -X POST {config.platform_url}/v1/import/lite \\")
-        click.echo(f"     -H 'Authorization: Bearer <api-key>' \\")
+        click.echo("     -H 'Authorization: Bearer <api-key>' \\")
         click.echo(f"     -F 'file=@{output_path}'")
     elif count > 0:
         click.echo("Connect to platform to import:")

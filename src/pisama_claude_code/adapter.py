@@ -10,12 +10,12 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Optional
 
-from pisama_core.adapters import PlatformAdapter, InjectionResult, InjectionMethod
+from pisama_core.adapters import InjectionMethod, InjectionResult, PlatformAdapter
 from pisama_core.injection import EnforcementLevel
-from pisama_core.traces import Platform, Span, SpanKind, SpanStatus
+from pisama_core.traces import Platform, Span
 
-from pisama_claude_code.trace_converter import TraceConverter
 from pisama_claude_code.storage import TraceStorage
+from pisama_claude_code.trace_converter import TraceConverter
 
 
 @dataclass

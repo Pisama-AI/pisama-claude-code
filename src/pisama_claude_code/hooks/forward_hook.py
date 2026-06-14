@@ -41,7 +41,7 @@ def main() -> None:
     session_id = _read_session_id()
 
     try:
-        from pisama_claude_code.cli import get_config, push_sessions, _all_traces
+        from pisama_claude_code.cli import _all_traces, get_config, push_sessions
 
         config = get_config()
         # Capture-only unless the user opted into forwarding.

@@ -5,9 +5,9 @@ Handles local storage of traces in SQLite and JSONL formats.
 
 import json
 import sqlite3
-from datetime import datetime, timezone
+from datetime import datetime
 from pathlib import Path
-from typing import Any, Optional
+from typing import Optional
 
 from pisama_core.traces import Platform, Span, SpanKind, SpanStatus
 
@@ -259,7 +259,6 @@ class TraceStorage:
 
     def _row_to_span(self, row: sqlite3.Row) -> Span:
         """Convert database row to Span object."""
-        from datetime import datetime
 
         # Parse kind
         try:

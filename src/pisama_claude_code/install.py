@@ -9,8 +9,7 @@ import shutil
 import stat
 import sys
 from pathlib import Path
-from typing import Dict, Any
-
+from typing import Dict
 
 HOOK_TEMPLATE = '''#!{python_path}
 """Auto-generated Pisama capture hook."""

@@ -8,7 +8,7 @@ import uuid
 from datetime import datetime, timezone
 from typing import Any, Optional
 
-from pisama_core.traces import Event, Platform, Span, SpanKind, SpanStatus
+from pisama_core.traces import Platform, Span, SpanKind, SpanStatus
 
 
 class TraceConverter:

@@ -27,7 +27,6 @@ from __future__ import annotations
 
 import hashlib
 import json
-import os
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
@@ -328,8 +327,9 @@ def forward_conversation(conv_id: str, proxy_dir: Optional[Path] = None) -> tupl
     Returns (ok, message). Best-effort; safe to call repeatedly (the backend
     replaces the session on each ingest)."""
     try:
-        from pisama_claude_code.cli import get_config, get_jwt, api_url, _cap_field
         import httpx
+
+        from pisama_claude_code.cli import _cap_field, api_url, get_config, get_jwt
     except Exception as e:  # noqa: BLE001
         return False, f"forward unavailable: {e}"
 
