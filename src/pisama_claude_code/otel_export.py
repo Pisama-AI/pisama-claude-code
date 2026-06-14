@@ -180,26 +180,64 @@ def export_traces_to_otel(
 def convert_trace_to_otel_dict(trace: Dict[str, Any]) -> Dict[str, Any]:
     """Convert a single trace to OTEL span format (dict).
 
-    Useful for exporting to file in OTEL-compatible format.
+    Used both by the file export and by the real-time `emit_span` path. Carries:
+    - `gen_ai.prompt` / `gen_ai.completion` so the backend populates the
+      ParsedState prompt/response the detectors read.
+    - `gen_ai.tool.name` so the subagent_spawn_loop membership check sees spawns.
+    - `gen_ai.state`: the full content (user input, REASONING, output, tool I/O,
+      cost) as JSON. The backend OTLP parser slurps a recognized state attribute
+      verbatim into `state_delta`, which is the only lossless channel — it does
+      not extract `gen_ai.reasoning` and truncates the prompt elsewhere.
     """
     timestamp_ns = _parse_timestamp(trace.get("timestamp"))
+    tool_name = trace.get("tool_name") or ""
+
+    attributes = [
+        {"key": "tool.name", "value": {"stringValue": str(tool_name)}},
+        {"key": "hook.type", "value": {"stringValue": str(trace.get("hook_type", ""))}},
+        {"key": "session.id", "value": {"stringValue": str(trace.get("session_id", ""))}},
+        {"key": "gen_ai.system", "value": {"stringValue": "anthropic"}},
+        {"key": "gen_ai.request.model", "value": {"stringValue": str(trace.get("model") or "")}},
+        {"key": "gen_ai.usage.input_tokens", "value": {"intValue": int(trace.get("input_tokens") or 0)}},
+        {"key": "gen_ai.usage.output_tokens", "value": {"intValue": int(trace.get("output_tokens") or 0)}},
+    ]
+    if tool_name:
+        attributes.append({"key": "gen_ai.tool.name", "value": {"stringValue": str(tool_name)}})
+    if trace.get("user_input"):
+        attributes.append({"key": "gen_ai.prompt", "value": {"stringValue": str(trace["user_input"])}})
+    if trace.get("ai_output"):
+        attributes.append({"key": "gen_ai.completion", "value": {"stringValue": str(trace["ai_output"])}})
+
+    # Full content -> gen_ai.state (lossless channel; preserves reasoning).
+    state: Dict[str, Any] = {}
+    for key in ("user_input", "reasoning", "ai_output", "tool_input", "tool_output",
+                "model", "cost_usd", "cache_read_tokens", "working_dir"):
+        val = trace.get(key)
+        if val not in (None, "", {}, []):
+            state[key] = val
+    tool_calls = trace.get("tool_calls")
+    if tool_calls:
+        state["tool_calls"] = tool_calls
+    if state:
+        try:
+            attributes.append({
+                "key": "gen_ai.state",
+                "value": {"stringValue": json.dumps(state, ensure_ascii=False, default=str)},
+            })
+        except (TypeError, ValueError):
+            pass
 
     return {
-        "name": f"{trace.get('tool_name', 'unknown')}:{trace.get('hook_type', '')}",
+        "name": f"{tool_name or 'unknown'}:{trace.get('hook_type', '')}",
         "kind": "SPAN_KIND_INTERNAL",
         "startTimeUnixNano": timestamp_ns,
         "endTimeUnixNano": timestamp_ns + 1_000_000,  # +1ms
-        "attributes": [
-            {"key": "tool.name", "value": {"stringValue": trace.get("tool_name", "")}},
-            {"key": "hook.type", "value": {"stringValue": trace.get("hook_type", "")}},
-            {"key": "session.id", "value": {"stringValue": trace.get("session_id", "")}},
-            {"key": "gen_ai.system", "value": {"stringValue": "anthropic"}},
-            {"key": "gen_ai.request.model", "value": {"stringValue": trace.get("model", "")}},
-            {"key": "gen_ai.usage.input_tokens", "value": {"intValue": trace.get("input_tokens", 0)}},
-            {"key": "gen_ai.usage.output_tokens", "value": {"intValue": trace.get("output_tokens", 0)}},
-        ],
-        "traceId": _generate_trace_id(trace.get("session_id", "")),
-        "spanId": _generate_span_id(trace.get("timestamp", "")),
+        "attributes": attributes,
+        "traceId": _generate_trace_id(str(trace.get("session_id", ""))),
+        # Unique per event so distinct tool calls never collide on span id.
+        "spanId": _generate_span_id(
+            f"{trace.get('session_id', '')}:{trace.get('timestamp', '')}:{tool_name}"
+        ),
     }
 
 

@@ -7,6 +7,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-06-14
+
+Real-time trace collection. Forwarding now streams one small appended span per
+event instead of re-sending the whole session as a single large transaction —
+the change that fixes long-session ingest stalls on the platform.
+
+### Changed
+- **Real-time forwarding (transport change).** When `auto_sync` is on, the
+  PostToolUse hook now emits each tool call as a single appended span to the
+  platform's idempotent `/traces/ingest` endpoint, and the reasoning proxy emits
+  one span per API call (reasoning included). Previously both re-sent the entire
+  session to the delete-and-replace `claude-code` batch endpoint, which became a
+  single giant transaction on long sessions. The `Stop` hook is now a *reconcile*
+  pass that re-emits only events a per-tool emit missed (tracked in the sync log),
+  not a full batch upload. `pisama-cc sync` still uses the batch endpoint for
+  explicit offline bulk uploads.
+- `emit_span()` carries full content — including extended-thinking *reasoning* —
+  in the `gen_ai.state` span attribute, which the platform stores verbatim;
+  content is secret-scrubbed and size-capped before it leaves the machine.
+
+### Notes
+- Real-time platform-side *processing* (live partial-trace detection + a live
+  dashboard SSE stream) is wired but ships off by default; a platform operator
+  enables it per tenant via feature flags.
+
 ## [0.5.0] - 2026-06-14
 
 This release makes trace capture and forwarding actually work end to end (the

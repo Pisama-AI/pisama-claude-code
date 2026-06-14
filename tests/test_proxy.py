@@ -25,6 +25,49 @@ SSE = (
 )
 
 
+# --------------------------- emit (real-time) ----------------------------- #
+
+def test_emit_proxy_record_emits_single_span(monkeypatch):
+    """The proxy forwards just THIS call's span via emit_span, not a whole-
+    conversation batch replay."""
+    from pisama_claude_code import cli
+
+    sent = {}
+
+    def fake_emit(trace, config):
+        sent["trace"] = trace
+        return True, "ok"
+
+    monkeypatch.setattr(cli, "emit_span", fake_emit)
+    monkeypatch.setattr(cli, "get_config", lambda: {"api_key": "k", "auto_sync": True})
+
+    rec = {
+        "ts": "2026-01-01T00:00:01+00:00",
+        "conversation_id": "cc-proxy-abc",
+        "model": "claude-opus-4-8",
+        "user_input": "hi",
+        "reasoning": "thinking",
+        "output": "answer",
+        "tool_calls": [{"name": "Bash", "input": {"command": "ls"}}],
+        "usage": {"input_tokens": 1, "output_tokens": 2},
+        "cost_usd": 0.0,
+    }
+    ok, msg = proxy.emit_proxy_record(rec)
+    assert ok, msg
+    # Mapped to the claude-code trace shape, single record, reasoning preserved.
+    assert sent["trace"]["session_id"] == "cc-proxy-abc"
+    assert sent["trace"]["reasoning"] == "thinking"
+    assert sent["trace"]["ai_output"] == "answer"
+
+
+def test_emit_proxy_record_noops_when_not_connected(monkeypatch):
+    from pisama_claude_code import cli
+
+    monkeypatch.setattr(cli, "get_config", lambda: {})
+    ok, msg = proxy.emit_proxy_record({"conversation_id": "x"})
+    assert not ok
+
+
 # --------------------------- pure parser tests ---------------------------- #
 
 def test_reassemble_sse_recovers_reasoning_and_output():

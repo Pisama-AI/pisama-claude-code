@@ -149,48 +149,168 @@ def _dashboard_url(config: dict) -> str:
     return base
 
 
-def push_sessions(config: dict, session_ids, include_outputs: bool) -> tuple:
-    """Forward COMPLETE sessions to the platform.
+# The backend caps the ingest body; stay safely under it. Large sessions are
+# degraded to fit (drop outputs, then truncate, then keep most-recent steps).
+PAYLOAD_LIMIT = 9_000_000
 
-    The backend ingest replaces a session wholesale on each upload (delete +
-    recreate), so we always send every captured trace for each target session
-    rather than a partial slice. Returns (ok: bool, message: str, result: dict|None).
-    """
+
+def _build_within_limit(session_traces: list, include_outputs: bool) -> tuple:
+    """Build a one-session payload that fits PAYLOAD_LIMIT, degrading if needed.
+
+    Returns (payload, note) where note describes any degradation applied."""
+    payload = prepare_sync_payload(session_traces, include_outputs)
+    if len(json.dumps(payload)) <= PAYLOAD_LIMIT:
+        return payload, None
+
+    # 1. Drop tool outputs (usually the bulk).
+    if include_outputs:
+        payload = prepare_sync_payload(session_traces, include_outputs=False)
+        if len(json.dumps(payload)) <= PAYLOAD_LIMIT:
+            return payload, "tool outputs dropped to fit size limit"
+
+    # 2. Hard-truncate the remaining content fields.
+    payload = prepare_sync_payload(session_traces, include_outputs=False)
+    for t in payload["traces"]:
+        for k in ("user_input", "reasoning", "ai_output"):
+            if isinstance(t.get(k), str) and len(t[k]) > 2000:
+                t[k] = t[k][:2000] + "...[truncated]"
+        ti = t.get("tool_input")
+        if isinstance(ti, dict):
+            for kk, vv in list(ti.items()):
+                if isinstance(vv, str) and len(vv) > 2000:
+                    ti[kk] = vv[:2000] + "...[truncated]"
+    note = "content truncated to fit size limit"
+
+    # 3. Drop oldest steps until it fits (last resort for pathological sessions).
+    while len(json.dumps(payload)) > PAYLOAD_LIMIT and len(payload["traces"]) > 1:
+        payload["traces"].pop(0)
+        payload["trace_count"] = len(payload["traces"])
+        note = f"kept the {len(payload['traces'])} most recent steps + truncated content to fit size limit"
+    return payload, note
+
+
+def push_sessions(config: dict, session_ids, include_outputs: bool) -> tuple:
+    """Forward COMPLETE sessions to the platform, one request per session.
+
+    The backend ingest replaces a session wholesale on each upload, so each
+    session is sent in full (degraded to fit the size limit if huge). Per-session
+    requests bound payload size and isolate failures.
+    Returns (ok: bool, message: str, result: dict|None)."""
     if httpx is None:
         return False, "httpx not installed", None
     token = get_jwt(config)
     if not token:
         return False, "authentication failed (check API key and --api-url)", None
 
-    traces = _traces_for_sessions(session_ids)
-    if not traces:
+    by_session: dict = {}
+    for t in _traces_for_sessions(session_ids):
+        by_session.setdefault(t.get("session_id"), []).append(t)
+    if not by_session:
         return False, "no captured traces for the requested session(s)", None
 
-    payload = prepare_sync_payload(traces, include_outputs)
+    stored_total, sent, notes, errors = 0, 0, [], []
+    for sid, strs in by_session.items():
+        payload, note = _build_within_limit(strs, include_outputs)
+        try:
+            resp = httpx.post(
+                api_url(config, "/traces/claude-code/ingest"),
+                headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
+                json=payload, timeout=60,
+            )
+        except Exception as e:
+            errors.append(f"{(sid or '?')[:12]}: network error: {e}")
+            continue
+        if resp.status_code in (200, 201, 202):
+            mark_synced(strs)
+            sent += 1
+            try:
+                r = resp.json()
+                stored_total += r.get("traces_stored", 0) or 0
+            except Exception:
+                pass
+            if note:
+                notes.append(f"{(sid or '?')[:12]}: {note}")
+        else:
+            errors.append(f"{(sid or '?')[:12]}: {resp.status_code} {resp.text[:120]}")
+
+    if sent == 0:
+        return False, "; ".join(errors) or "no sessions sent", None
+    msg = "ok"
+    if notes:
+        msg += " | " + "; ".join(notes)
+    if errors:
+        msg += " | partial, errors: " + "; ".join(errors)
+    return True, msg, {"traces_stored": stored_total, "sessions": sent}
+
+
+def emit_span(trace: dict, config: Optional[dict] = None) -> tuple:
+    """Forward ONE captured event as a single appended OTLP span (real-time).
+
+    The real-time path. Instead of re-sending a whole session as one big
+    delete-and-replace transaction (the claude-code batch endpoint), this POSTs
+    a single tiny span to the append-only ``/traces/ingest`` endpoint, which is
+    idempotent on ``(trace_id, state_hash)`` so re-emits dedupe. A long session
+    becomes many small requests, never one giant transaction.
+
+    Content (incl. reasoning) is scrubbed + capped, then carried in
+    ``gen_ai.state`` so the backend OTLP parser stores it verbatim — that parser
+    does not extract ``gen_ai.reasoning`` and truncates the prompt, so the state
+    attribute is the only lossless channel. Opt-in (``auto_sync``) and
+    best-effort: returns ``(ok, msg)`` and never raises.
+    """
+    if httpx is None:
+        return False, "httpx not installed"
+    config = config if config is not None else get_config()
+    if not config.get("api_key") or not config.get("auto_sync", False):
+        return False, "not connected / auto-sync off"
+    token = get_jwt(config)
+    if not token:
+        return False, "authentication failed"
+
+    from pisama_claude_code.otel_export import convert_trace_to_otel_dict
+
+    safe = dict(trace)
+    for k in ("user_input", "reasoning", "ai_output", "tool_output", "tool_input"):
+        if safe.get(k) is not None:
+            safe[k] = _cap_field(safe[k])
+
+    session_id = str(safe.get("session_id") or "")
+    payload = {
+        "resourceSpans": [
+            {
+                "resource": {
+                    "attributes": [
+                        {"key": "service.name", "value": {"stringValue": "claude-code"}},
+                        {"key": "pisama.harness.type", "value": {"stringValue": "claude_code"}},
+                        {"key": "session.id", "value": {"stringValue": session_id}},
+                    ]
+                },
+                "scopeSpans": [
+                    {
+                        "scope": {"name": "pisama-claude-code"},
+                        "spans": [convert_trace_to_otel_dict(safe)],
+                    }
+                ],
+            }
+        ]
+    }
     try:
         resp = httpx.post(
-            api_url(config, "/traces/claude-code/ingest"),
-            headers={
-                "Authorization": f"Bearer {token}",
-                "Content-Type": "application/json",
-            },
+            api_url(config, "/traces/ingest"),
+            headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
             json=payload,
-            timeout=30,
+            timeout=15,
         )
     except Exception as e:
-        return False, f"network error: {e}", None
-
+        return False, f"network error: {e}"
     if resp.status_code in (200, 201, 202):
-        mark_synced(traces)
-        try:
-            return True, "ok", resp.json()
-        except Exception:
-            return True, "ok", None
-    return False, f"{resp.status_code}: {resp.text[:200]}", None
+        mark_synced([{"session_id": session_id, "timestamp": safe.get("timestamp")}])
+        return True, "ok"
+    return False, f"{resp.status_code}: {resp.text[:160]}"
 
 
 @click.group()
-@click.version_option(version="0.5.0")
+@click.version_option(version="0.6.0")
 def main():
     """Pisama Claude Code - Trace capture and sync."""
     pass
@@ -1488,6 +1608,7 @@ def anonymize_path(path: str) -> str:
 def mark_synced(traces: list):
     """Mark traces as synced (for deduplication)."""
     sync_log = CONFIG_DIR / "sync_log.jsonl"
+    CONFIG_DIR.mkdir(parents=True, exist_ok=True)
     with open(sync_log, "a") as f:
         for t in traces:
             f.write(json.dumps({
@@ -1495,6 +1616,32 @@ def mark_synced(traces: list):
                 "timestamp": t.get("timestamp"),
                 "session_id": t.get("session_id"),
             }) + "\n")
+
+
+def _synced_keys() -> set:
+    """(session_id, timestamp) pairs already forwarded, from the sync log.
+
+    Lets the Stop-hook reconcile re-emit only the events a per-tool emit missed,
+    so reconciling a long session is O(unsent) rather than re-POSTing every span
+    on every turn.
+    """
+    sync_log = CONFIG_DIR / "sync_log.jsonl"
+    keys: set = set()
+    if not sync_log.exists():
+        return keys
+    try:
+        for line in sync_log.read_text().splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                r = json.loads(line)
+            except ValueError:
+                continue
+            keys.add((r.get("session_id"), r.get("timestamp")))
+    except OSError:
+        pass
+    return keys
 
 
 # =============================================================================

@@ -1,13 +1,18 @@
-"""Stop-hook entry point: forward the current Claude Code session to Pisama.
+"""Stop-hook entry point: reconcile the current Claude Code session to Pisama.
 
 Invoked by ~/.claude/hooks/pisama-forward.sh, which runs this DETACHED in the
 background so a slow or failed network call can never block or delay the
-session. Reads the Stop hook payload from stdin to learn the session_id, then
-forwards that session's complete set of captured traces to the platform.
+session. Reads the Stop hook payload from stdin to learn the session_id.
+
+Real-time forwarding happens per tool call (the PostToolUse capture hook emits
+one appended span each). This Stop hook is now a RECONCILE pass, not the primary
+forward: it re-emits, via the same idempotent append endpoint, only the events
+that a per-tool emit missed (tracked in the sync log). No more giant
+delete-and-replace batch — that single large transaction is what destabilized
+production on long sessions.
 
 No-ops silently unless the user has connected (api_key present) and auto-sync is
-enabled. The platform ingest replaces a session wholesale on each upload, so
-re-forwarding the growing session every turn is safe and idempotent.
+enabled.
 """
 
 import json
@@ -41,7 +46,12 @@ def main() -> None:
     session_id = _read_session_id()
 
     try:
-        from pisama_claude_code.cli import _all_traces, get_config, push_sessions
+        from pisama_claude_code.cli import (
+            _all_traces,
+            _synced_keys,
+            emit_span,
+            get_config,
+        )
 
         config = get_config()
         # Capture-only unless the user opted into forwarding.
@@ -49,15 +59,25 @@ def main() -> None:
             return
 
         sessions = [session_id] if session_id else _recent_session_ids(_all_traces())
-        sessions = [s for s in sessions if s]
-        if not sessions:
+        wanted = {s for s in sessions if s}
+        if not wanted:
             return
 
-        # Full content by default (per the connect-time choice); bounded per field.
-        full_content = config.get("forward_full_content", True)
-        ok, msg, _ = push_sessions(config, sessions, include_outputs=full_content)
-        if not ok:
-            print(f"Pisama forward: {msg}", file=sys.stderr)
+        # Reconcile: re-emit only the session's events not already forwarded, as
+        # single appended spans (idempotent on the backend). O(unsent), no batch.
+        already = _synced_keys()
+        traces = sorted(_all_traces(), key=lambda t: t.get("timestamp") or "")
+        failures = 0
+        for t in traces:
+            if t.get("session_id") not in wanted:
+                continue
+            if (t.get("session_id"), t.get("timestamp")) in already:
+                continue
+            ok, msg = emit_span(t, config)
+            if not ok:
+                failures += 1
+        if failures:
+            print(f"Pisama reconcile: {failures} span(s) failed to forward", file=sys.stderr)
     except Exception as e:
         # Forwarding must never disrupt the session.
         print(f"Pisama forward error: {e}", file=sys.stderr)

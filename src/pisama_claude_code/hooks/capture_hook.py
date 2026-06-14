@@ -537,6 +537,38 @@ def _capture(hook_data: dict, hook_type: str) -> None:
     except Exception:
         pass
 
+    # Real-time forward: stream THIS event as a single appended span so a long
+    # session never becomes one giant batch transaction. Opt-in (auto_sync) and
+    # best-effort — runs in an async hook, never blocks or breaks the session.
+    if hook_type in ("post", "PostToolUse"):
+        try:
+            from pisama_claude_code.cli import emit_span, get_config
+
+            cfg = get_config()
+            if cfg.get("api_key") and cfg.get("auto_sync", False):
+                emit_span(
+                    {
+                        "session_id": session_id,
+                        "timestamp": timestamp,
+                        "hook_type": hook_type,
+                        "tool_name": tool_name,
+                        "tool_input": trace.get("tool_input"),
+                        "tool_output": trace.get("tool_output"),
+                        "working_dir": working_dir,
+                        "model": model,
+                        "input_tokens": usage.get("input_tokens") or 0,
+                        "output_tokens": usage.get("output_tokens") or 0,
+                        "cache_read_tokens": usage.get("cache_read_input_tokens") or 0,
+                        "cost_usd": cost,
+                        "user_input": trace.get("user_input"),
+                        "reasoning": trace.get("reasoning"),
+                        "ai_output": trace.get("ai_output"),
+                    },
+                    cfg,
+                )
+        except Exception:
+            pass  # forwarding must never disrupt the session
+
 
 # Backwards-compatible alias: this used to be the import-failure fallback path,
 # it is now the primary capture path.

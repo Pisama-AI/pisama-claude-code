@@ -123,6 +123,65 @@ def test_push_sessions_forwards_complete_session(tmp_path, monkeypatch):
     assert {t.get("tool_output") for t in sent} == {"OUT1", "OUT2"}
 
 
+def test_emit_span_appends_single_otlp_span_with_reasoning(tmp_path, monkeypatch):
+    monkeypatch.setattr(cli, "CONFIG_FILE", tmp_path / "config.json")
+    monkeypatch.setattr(cli, "CONFIG_DIR", tmp_path)
+    token = _jwt(99999999999)
+    captured = {}
+
+    def fake_post(url, **kw):
+        if url.endswith("/auth/token"):
+            r = MagicMock(status_code=200)
+            r.json.return_value = {"access_token": token}
+            return r
+        captured["url"] = url
+        captured["json"] = kw.get("json")
+        r = MagicMock(status_code=202)
+        r.json.return_value = {"accepted": 1}
+        return r
+
+    with patch.object(cli, "httpx") as mock_httpx:
+        mock_httpx.post.side_effect = fake_post
+        ok, msg = cli.emit_span(
+            {
+                "session_id": "s1",
+                "timestamp": "2026-01-01T00:00:01+00:00",
+                "hook_type": "post",
+                "tool_name": "Bash",
+                "tool_input": {"command": "ls"},
+                "tool_output": "out",
+                "model": "claude",
+                "input_tokens": 1,
+                "output_tokens": 2,
+                "user_input": "hi",
+                "reasoning": "let me think about this",
+                "ai_output": "done",
+            },
+            {"api_key": "pisama_x", "api_url": "http://localhost:8000", "auto_sync": True},
+        )
+
+    assert ok, msg
+    # Append endpoint, not the batch one.
+    assert captured["url"].endswith("/api/v1/traces/ingest")
+    span = captured["json"]["resourceSpans"][0]["scopeSpans"][0]["spans"][0]
+    state_attr = next(a for a in span["attributes"] if a["key"] == "gen_ai.state")
+    state = json.loads(state_attr["value"]["stringValue"])
+    # Reasoning survives in the lossless state channel.
+    assert state["reasoning"] == "let me think about this"
+    assert state["user_input"] == "hi"
+    # Marked synced so the Stop reconcile won't re-emit it.
+    assert ("s1", "2026-01-01T00:00:01+00:00") in cli._synced_keys()
+
+
+def test_emit_span_noops_when_auto_sync_off():
+    ok, msg = cli.emit_span(
+        {"session_id": "s1", "timestamp": "t"},
+        {"api_key": "pisama_x", "auto_sync": False},
+    )
+    assert not ok
+    assert "auto-sync" in msg
+
+
 def test_forward_hook_noops_when_not_connected(tmp_path, monkeypatch):
     monkeypatch.setattr(cli, "CONFIG_FILE", tmp_path / "config.json")
     monkeypatch.setattr(cli, "CONFIG_DIR", tmp_path)
@@ -152,11 +211,11 @@ def test_forward_hook_forwards_when_connected(tmp_path, monkeypatch):
     posted = []
 
     def fake_post(url, **kw):
-        posted.append(url)
+        posted.append((url, kw.get("json")))
         r = MagicMock(status_code=200 if url.endswith("/auth/token") else 202)
         r.json.return_value = (
             {"access_token": token} if url.endswith("/auth/token")
-            else {"traces_stored": 1}
+            else {"accepted": 1}
         )
         return r
 
@@ -164,4 +223,13 @@ def test_forward_hook_forwards_when_connected(tmp_path, monkeypatch):
         mock_httpx.post.side_effect = fake_post
         forward_hook.main()
 
-    assert any(u.endswith("/api/v1/traces/claude-code/ingest") for u in posted)
+    # Real-time reconcile now appends single OTLP spans to /traces/ingest, NOT
+    # the old delete-and-replace claude-code batch endpoint.
+    ingests = [(u, j) for (u, j) in posted if u.endswith("/api/v1/traces/ingest")]
+    assert ingests, posted
+    assert not any(u.endswith("/traces/claude-code/ingest") for (u, _) in posted)
+    # OTLP shape + reasoning/content rides in gen_ai.state.
+    _, payload = ingests[0]
+    span = payload["resourceSpans"][0]["scopeSpans"][0]["spans"][0]
+    attr_keys = {a["key"] for a in span["attributes"]}
+    assert "gen_ai.state" in attr_keys

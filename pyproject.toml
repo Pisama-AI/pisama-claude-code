@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "pisama-claude-code"
-version = "0.5.0"
+version = "0.6.0"
 description = "Trace capture for Claude Code sessions - sync to Pisama platform for analysis"
 readme = "README.md"
 license = "MIT"

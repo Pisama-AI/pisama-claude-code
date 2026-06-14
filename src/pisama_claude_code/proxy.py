@@ -373,6 +373,24 @@ def forward_conversation(conv_id: str, proxy_dir: Optional[Path] = None) -> tupl
     return False, f"{resp.status_code}: {resp.text[:160]}"
 
 
+def emit_proxy_record(rec: Dict[str, Any]) -> tuple:
+    """Forward ONE proxy call record (incl. reasoning) as a single appended span.
+
+    The real-time proxy path: emit just this API call's span via the append-only
+    ``/traces/ingest`` endpoint (idempotent on state_hash), instead of replaying
+    the whole conversation to the batch endpoint on every call. Best-effort;
+    returns ``(ok, message)`` and never raises into the request path.
+    """
+    try:
+        from pisama_claude_code.cli import emit_span, get_config
+    except Exception as e:  # noqa: BLE001
+        return False, f"emit unavailable: {e}"
+    config = get_config()
+    if not config.get("api_key") or not config.get("auto_sync", False):
+        return False, "not connected / auto-sync off"
+    return emit_span(_record_to_trace(rec), config)
+
+
 # --------------------------------------------------------------------------- #
 # The streaming reverse proxy (aiohttp)
 # --------------------------------------------------------------------------- #
@@ -485,16 +503,16 @@ def make_app(upstream: str = DEFAULT_UPSTREAM, forward: bool = True):
                 )
                 if record and forward:
                     import asyncio
-                    asyncio.create_task(_forward_async(record["conversation_id"]))
+                    asyncio.create_task(_emit_record_async(record))
             except Exception as e:  # noqa: BLE001
                 print(f"pisama proxy capture error: {e}", file=sys.stderr)
 
         return client_resp
 
-    async def _forward_async(conv_id: str):
+    async def _emit_record_async(record: Dict[str, Any]):
         try:
             import asyncio
-            await asyncio.to_thread(forward_conversation, conv_id)
+            await asyncio.to_thread(emit_proxy_record, record)
         except Exception as e:  # noqa: BLE001
             print(f"pisama proxy forward error: {e}", file=sys.stderr)
 
