@@ -201,6 +201,10 @@ def convert_trace_to_otel_dict(trace: Dict[str, Any]) -> Dict[str, Any]:
         {"key": "gen_ai.usage.input_tokens", "value": {"intValue": int(trace.get("input_tokens") or 0)}},
         {"key": "gen_ai.usage.output_tokens", "value": {"intValue": int(trace.get("output_tokens") or 0)}},
     ]
+    if trace.get("cost_usd"):
+        attributes.append(
+            {"key": "gen_ai.usage.cost_usd", "value": {"doubleValue": float(trace["cost_usd"])}}
+        )
     if tool_name:
         attributes.append({"key": "gen_ai.tool.name", "value": {"stringValue": str(tool_name)}})
     if trace.get("user_input"):
