@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.2] - 2026-06-15
+
+### Changed
+- Per-field forward cap raised from 100 KB to **1 MB** (default), and made
+  configurable via `PISAMA_CC_MAX_FIELD_CHARS`. Keeps large tool outputs intact
+  while staying safely under the platform's 10 MB request-body limit; secrets are
+  still scrubbed before any capping.
+
 ## [0.6.1] - 2026-06-14
 
 ### Fixed

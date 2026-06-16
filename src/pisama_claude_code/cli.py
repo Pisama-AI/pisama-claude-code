@@ -35,6 +35,7 @@ OTEL Export:
 import base64
 import gzip
 import json
+import os
 import re
 import sys
 import time
@@ -62,9 +63,24 @@ HOOKS_DIR = CLAUDE_DIR / "hooks"
 API_PREFIX = "/api/v1"
 JWT_LEEWAY_SECONDS = 60
 DEFAULT_API_URL = "https://api.pisama.ai"
-# Per-field size cap for forwarded content. Generous (full content) but bounded
-# so a single huge tool output can't create a runaway payload.
-MAX_FIELD_CHARS = 100_000
+# Per-field size cap for forwarded content. Default 1 MB — generous enough for
+# essentially all tool outputs while staying safely under the platform's 10 MB
+# request-body limit (a field can appear ~2x in a span payload). Override with
+# PISAMA_CC_MAX_FIELD_CHARS for unusually large captures; values past ~3 MB risk
+# a 413 on a single huge field. Secrets are still scrubbed before any capping.
+def _resolve_max_field_chars() -> int:
+    raw = os.environ.get("PISAMA_CC_MAX_FIELD_CHARS")
+    if raw:
+        try:
+            v = int(raw)
+            if v > 0:
+                return v
+        except ValueError:
+            pass
+    return 1_000_000
+
+
+MAX_FIELD_CHARS = _resolve_max_field_chars()
 
 
 def get_config() -> dict:
@@ -322,7 +338,7 @@ def emit_span(trace: dict, config: Optional[dict] = None) -> tuple:
 
 
 @click.group()
-@click.version_option(version="0.6.1")
+@click.version_option(version="0.6.2")
 def main():
     """Pisama Claude Code - Trace capture and sync."""
     pass
