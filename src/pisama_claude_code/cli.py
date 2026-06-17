@@ -807,7 +807,7 @@ def analyze(last: int):
         response = httpx.post(
             f"{config['api_url']}/v1/traces/claude-code/analyze",
             headers={
-                "Authorization": f"Bearer {config['api_key']}",
+                "Authorization": f"Bearer {get_jwt(config) or config['api_key']}",
                 "Content-Type": "application/json",
             },
             json=payload,
@@ -892,7 +892,7 @@ def fix_list(detection_id: Optional[str]):
 
         response = httpx.get(
             endpoint,
-            headers={"Authorization": f"Bearer {config['api_key']}"},
+            headers={"Authorization": f"Bearer {get_jwt(config) or config['api_key']}"},
             timeout=30,
         )
 
@@ -942,7 +942,7 @@ def fix_show(fix_id: str, detection_id: str):
     try:
         response = httpx.get(
             f"{config['api_url']}/v1/detections/{detection_id}/fixes",
-            headers={"Authorization": f"Bearer {config['api_key']}"},
+            headers={"Authorization": f"Bearer {get_jwt(config) or config['api_key']}"},
             timeout=30,
         )
 
@@ -1036,7 +1036,7 @@ def fix_apply(fix_id: str, detection_id: str, dry_run: bool, force: bool):
         # First, get the fix details
         response = httpx.get(
             f"{config['api_url']}/v1/detections/{detection_id}/fixes",
-            headers={"Authorization": f"Bearer {config['api_key']}"},
+            headers={"Authorization": f"Bearer {get_jwt(config) or config['api_key']}"},
             timeout=30,
         )
 
@@ -1094,7 +1094,7 @@ def fix_apply(fix_id: str, detection_id: str, dry_run: bool, force: bool):
         # Apply the fix via API
         apply_response = httpx.post(
             f"{config['api_url']}/v1/detections/{detection_id}/fixes/{fix_id}/apply",
-            headers={"Authorization": f"Bearer {config['api_key']}"},
+            headers={"Authorization": f"Bearer {get_jwt(config) or config['api_key']}"},
             timeout=30,
         )
 
