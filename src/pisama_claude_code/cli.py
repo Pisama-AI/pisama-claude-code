@@ -69,6 +69,41 @@ def save_config(config: dict):
     CONFIG_FILE.write_text(json.dumps(config, indent=2))
 
 
+_jwt_cache: dict = {}
+
+
+def _bearer(config: dict) -> str:
+    """Return the Bearer token for API calls.
+
+    The Pisama API authenticates ingest/detection endpoints with a short-lived
+    JWT, not the raw ``pisama_...`` API key (those endpoints decode a JWT). So
+    exchange the stored api_key for a JWT via ``/auth/token`` once per process.
+    If the configured value is already a JWT (legacy configs), use it as-is; on
+    any exchange failure fall back to the raw key (older self-hosted backends
+    accepted it directly).
+    """
+    key = config.get("api_key", "") or ""
+    if key.startswith("eyJ"):  # already a JWT
+        return key
+    if key in _jwt_cache:
+        return _jwt_cache[key]
+    if httpx is not None:
+        try:
+            resp = httpx.post(
+                f"{config['api_url']}/v1/auth/token",
+                json={"api_key": key},
+                timeout=15,
+            )
+            if resp.status_code == 200:
+                tok = resp.json().get("access_token", "")
+                if tok:
+                    _jwt_cache[key] = tok
+                    return tok
+        except Exception:
+            pass
+    return key
+
+
 @click.group()
 @click.version_option(version="0.4.3")
 def main():
@@ -472,7 +507,7 @@ def sync(last: int, include_outputs: bool):
         response = httpx.post(
             f"{config['api_url']}/v1/traces/claude-code/ingest",
             headers={
-                "Authorization": f"Bearer {config['api_key']}",
+                "Authorization": f"Bearer {_bearer(config)}",
                 "Content-Type": "application/json",
             },
             json=payload,
@@ -531,7 +566,7 @@ def analyze(last: int):
         response = httpx.post(
             f"{config['api_url']}/v1/traces/claude-code/analyze",
             headers={
-                "Authorization": f"Bearer {config['api_key']}",
+                "Authorization": f"Bearer {_bearer(config)}",
                 "Content-Type": "application/json",
             },
             json=payload,
@@ -616,7 +651,7 @@ def fix_list(detection_id: Optional[str]):
 
         response = httpx.get(
             endpoint,
-            headers={"Authorization": f"Bearer {config['api_key']}"},
+            headers={"Authorization": f"Bearer {_bearer(config)}"},
             timeout=30,
         )
 
@@ -666,7 +701,7 @@ def fix_show(fix_id: str, detection_id: str):
     try:
         response = httpx.get(
             f"{config['api_url']}/v1/detections/{detection_id}/fixes",
-            headers={"Authorization": f"Bearer {config['api_key']}"},
+            headers={"Authorization": f"Bearer {_bearer(config)}"},
             timeout=30,
         )
 
@@ -760,7 +795,7 @@ def fix_apply(fix_id: str, detection_id: str, dry_run: bool, force: bool):
         # First, get the fix details
         response = httpx.get(
             f"{config['api_url']}/v1/detections/{detection_id}/fixes",
-            headers={"Authorization": f"Bearer {config['api_key']}"},
+            headers={"Authorization": f"Bearer {_bearer(config)}"},
             timeout=30,
         )
 
@@ -818,7 +853,7 @@ def fix_apply(fix_id: str, detection_id: str, dry_run: bool, force: bool):
         # Apply the fix via API
         apply_response = httpx.post(
             f"{config['api_url']}/v1/detections/{detection_id}/fixes/{fix_id}/apply",
-            headers={"Authorization": f"Bearer {config['api_key']}"},
+            headers={"Authorization": f"Bearer {_bearer(config)}"},
             timeout=30,
         )
 
