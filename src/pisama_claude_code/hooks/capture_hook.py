@@ -402,6 +402,15 @@ def _capture(hook_data: dict, hook_type: str) -> None:
         tool_output = hook_data.get("tool_output")
     working_dir = hook_data.get("cwd") or hook_data.get("working_dir") or os.getcwd()
 
+    # Agent identity: Claude Code sets agent_id/agent_type on hook payloads
+    # only when the tool call runs inside a subagent (Task/workflow fan-out).
+    # Absence means the main-loop agent. Forwarding this is what lets the
+    # backend keep parallel subagents apart instead of flattening a fan-out
+    # into one sequential stream.
+    agent_id = hook_data.get("agent_id")
+    agent_type = hook_data.get("agent_type")
+    is_sidechain = bool(agent_id)
+
     # Get AI response and token usage from transcript (PostToolUse only)
     model = None
     usage = {}
@@ -440,6 +449,10 @@ def _capture(hook_data: dict, hook_type: str) -> None:
         "tool_input": tool_input,
         "tool_output": tool_output,
         "working_dir": working_dir,
+        # Agent identity (None/False for main-loop calls)
+        "agent_id": agent_id,
+        "agent_type": agent_type,
+        "is_sidechain": is_sidechain,
         # Model and usage
         "model": model,
         "usage": usage,
@@ -556,6 +569,9 @@ def _capture(hook_data: dict, hook_type: str) -> None:
                         "tool_input": trace.get("tool_input"),
                         "tool_output": trace.get("tool_output"),
                         "working_dir": working_dir,
+                        "agent_id": agent_id,
+                        "agent_type": agent_type,
+                        "is_sidechain": is_sidechain,
                         "model": model,
                         "input_tokens": usage.get("input_tokens") or 0,
                         "output_tokens": usage.get("output_tokens") or 0,

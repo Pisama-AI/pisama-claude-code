@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.3] - 2026-07-06
+
+### Added
+- Forward agent identity. Claude Code hook payloads carry `agent_id` and
+  `agent_type` for tool calls made inside subagents (Task/workflow fan-outs);
+  the capture hook now records them (plus a derived `is_sidechain`) and both
+  forwarding paths carry them: the batch sync payload as top-level fields, and
+  the real-time OTLP span as `gen_ai.agent.id` / `gen_ai.agent.name` plus the
+  `gen_ai.state` channel. Without this the backend flattened parallel
+  subagents into one sequential stream (false "Repeated Tool Calls" loops) and
+  classified multi-agent sessions as single-agent chat, so the multi-agent
+  detector family never ran on the Claude Code channel.
+
 ## [0.6.2] - 2026-06-15
 
 ### Changed

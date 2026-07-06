@@ -207,6 +207,13 @@ def convert_trace_to_otel_dict(trace: Dict[str, Any]) -> Dict[str, Any]:
         )
     if tool_name:
         attributes.append({"key": "gen_ai.tool.name", "value": {"stringValue": str(tool_name)}})
+    # Agent identity: present only for subagent (sidechain) tool calls. The
+    # backend OTLP parser reads gen_ai.agent.id/name as the agent identity
+    # fallback, which keeps parallel subagents apart.
+    if trace.get("agent_id"):
+        attributes.append({"key": "gen_ai.agent.id", "value": {"stringValue": str(trace["agent_id"])}})
+        if trace.get("agent_type"):
+            attributes.append({"key": "gen_ai.agent.name", "value": {"stringValue": str(trace["agent_type"])}})
     if trace.get("user_input"):
         attributes.append({"key": "gen_ai.prompt", "value": {"stringValue": str(trace["user_input"])}})
     if trace.get("ai_output"):
@@ -215,7 +222,8 @@ def convert_trace_to_otel_dict(trace: Dict[str, Any]) -> Dict[str, Any]:
     # Full content -> gen_ai.state (lossless channel; preserves reasoning).
     state: Dict[str, Any] = {}
     for key in ("user_input", "reasoning", "ai_output", "tool_input", "tool_output",
-                "model", "cost_usd", "cache_read_tokens", "working_dir"):
+                "model", "cost_usd", "cache_read_tokens", "working_dir",
+                "agent_id", "agent_type", "is_sidechain"):
         val = trace.get(key)
         if val not in (None, "", {}, []):
             state[key] = val

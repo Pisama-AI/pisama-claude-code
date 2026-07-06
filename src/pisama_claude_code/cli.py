@@ -338,7 +338,7 @@ def emit_span(trace: dict, config: Optional[dict] = None) -> tuple:
 
 
 @click.group()
-@click.version_option(version="0.6.2")
+@click.version_option(version="0.6.3")
 def main():
     """Pisama Claude Code - Trace capture and sync."""
     pass
@@ -1458,6 +1458,9 @@ def normalize_trace(t: dict) -> dict:
     # Session ID might be in different places
     session_id = t.get("session_id") or t.get("trace_id", "")[:8]
 
+    # Original hook payload, preserved verbatim by the capture hook.
+    raw_hook = t.get("raw") if isinstance(t.get("raw"), dict) else {}
+
     # Extract usage data (new fields)
     usage = t.get("usage", {})
     input_tokens = usage.get("input_tokens", 0) if usage else 0
@@ -1484,6 +1487,16 @@ def normalize_trace(t: dict) -> dict:
         "reasoning": t.get("reasoning"),
         "ai_output": t.get("ai_output"),
         "ai_response": t.get("ai_response"),  # Legacy field
+        # Agent identity. Records captured before these fields existed still
+        # preserve the original hook payload under "raw", which carried
+        # agent_id/agent_type — fall back to it so historical sessions re-sync
+        # with identity intact; infer is_sidechain from agent_id presence.
+        "agent_id": t.get("agent_id") or raw_hook.get("agent_id"),
+        "agent_type": t.get("agent_type") or raw_hook.get("agent_type"),
+        "is_sidechain": t.get(
+            "is_sidechain",
+            bool(t.get("agent_id") or raw_hook.get("agent_id")),
+        ),
         "_raw": t,
     }
 
@@ -1608,6 +1621,10 @@ def prepare_sync_payload(traces: list, include_outputs: bool) -> dict:
             "user_input": _cap_field(t.get("user_input")) if t.get("user_input") is not None else None,
             "reasoning": _cap_field(t.get("reasoning")) if t.get("reasoning") is not None else None,
             "ai_output": _cap_field(t.get("ai_output")) if t.get("ai_output") is not None else None,
+            # Agent identity — lets the backend keep parallel subagents apart
+            "agent_id": t.get("agent_id"),
+            "agent_type": t.get("agent_type"),
+            "is_sidechain": t.get("is_sidechain", bool(t.get("agent_id"))),
         }
 
         # Sanitize tool input
