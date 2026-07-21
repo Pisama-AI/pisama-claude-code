@@ -7,7 +7,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [0.6.3] - 2026-07-06
+## [0.6.3] - 2026-07-21
 
 ### Added
 - Forward agent identity. Claude Code hook payloads carry `agent_id` and
@@ -19,6 +19,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   subagents into one sequential stream (false "Repeated Tool Calls" loops) and
   classified multi-agent sessions as single-agent chat, so the multi-agent
   detector family never ran on the Claude Code channel.
+
+### Fixed
+- `analyze` and the `fix list/show/apply` commands now request `/api/v1/...`
+  paths via the shared `api_url()` helper. They previously hard-coded bare
+  `/v1/...` paths, which the platform never serves (every router is mounted
+  under `/api/v1`), so these commands always failed with 404 against
+  production. The sync/auth/ingest wire layer was already correct.
 
 ## [0.6.2] - 2026-06-15
 
