@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- `lite export` no longer prints a curl example against `/v1/import/lite`,
+  an endpoint that does not exist on the platform (and whose nearest real
+  route, `POST /api/v1/import-jobs`, ingests raw trace files under JWT auth,
+  not pre-computed lite detections). The post-export hint now points at the
+  path that actually works: `pisama-cc connect` + `pisama-cc sync`, which
+  uploads the captured sessions so the platform re-runs full detection. The
+  misleading `lite init (set platform_url in config)` fallback is gone too;
+  `lite init` has no such option.
+
 ## [0.6.3] - 2026-07-21
 
 ### Added
