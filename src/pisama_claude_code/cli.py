@@ -1937,12 +1937,11 @@ def vault_status():
         click.echo("   Status: Not created yet")
         click.echo("   Will be created on first tokenization")
 
-    # Tokenization config
+    # Tokenization switch. The capture hook reads the PISAMA_TOKENIZATION env
+    # var; there is no config-file toggle.
     click.echo("\n⚙️  Configuration:")
-    config_data = get_config()
-    tokenization = config_data.get("tokenization", {})
-    enabled = tokenization.get("enabled", True)
-    click.echo(f"   Tokenization: {'enabled' if enabled else 'disabled'}")
+    enabled = os.environ.get("PISAMA_TOKENIZATION", "1") == "1"
+    click.echo(f"   Tokenization: {'enabled' if enabled else 'disabled'} (PISAMA_TOKENIZATION)")
 
 
 @vault.command("lookup")
@@ -2296,27 +2295,29 @@ def tokenize_test(text: str, patterns: Optional[str]):
 
 @tokenize.command("config")
 def tokenize_config():
-    """Show tokenization configuration."""
-    config_data = get_config()
-    tokenization = config_data.get("tokenization", {})
+    """Show the effective tokenization configuration."""
+    from pisama_claude_code.hooks.capture_hook import TOKENIZATION_FIELDS
 
     click.echo("⚙️  Tokenization Configuration")
     click.echo("=" * 50)
-    click.echo(f"Enabled: {tokenization.get('enabled', True)}")
-    click.echo(f"Fail-open: {tokenization.get('fail_open', True)}")
+    enabled = os.environ.get("PISAMA_TOKENIZATION", "1") == "1"
+    click.echo(f"Enabled: {enabled} (set PISAMA_TOKENIZATION=0 to disable)")
+    click.echo("Fail-open: True (capture never blocks on tokenization errors)")
+    click.echo(f"Vault: {CONFIG_DIR / 'vault.db'}")
 
-    custom = tokenization.get("custom_patterns", {})
-    if custom:
-        click.echo("\nCustom Patterns:")
-        for name, pattern in custom.items():
-            if not name.startswith("_"):
-                click.echo(f"  {name}: {pattern}")
+    click.echo("\nTokenized fields:")
+    for field in TOKENIZATION_FIELDS:
+        click.echo(f"  {field}")
 
-    exclusions = tokenization.get("exclusions", [])
-    if exclusions:
-        click.echo("\nExclusions:")
-        for e in exclusions:
-            click.echo(f"  {e}")
+    try:
+        from pisama_core.tokenization import PIIDetector
+    except ImportError:
+        click.echo("\nDetection patterns: unavailable (pisama-core not installed)")
+        return
+
+    click.echo("\nDetection patterns:")
+    for name in sorted(PIIDetector().patterns.keys()):
+        click.echo(f"  {name}")
 
 
 # =============================================================================

@@ -8,6 +8,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
+- Audited the vault and tokenize commands. The vault surface checked out
+  almost entirely (every pisama-core class, method, stats key, the
+  `[TYPE:sess:random]` format hint, the `pisama-core[tokenization]` extra,
+  and the shared `~/.claude/pisama/vault.db` path are all real, verified
+  against pisama-core 1.7.3), with one exception: both `vault status` and
+  `tokenize config` displayed a `tokenization` block from config.json that
+  nothing writes and nothing reads. The capture hook's real switch is the
+  `PISAMA_TOKENIZATION` env var, fail-open is hardcoded, and the displayed
+  `custom_patterns`/`exclusions` had zero consumers, so the commands could
+  report "disabled" while every session kept tokenizing (and vice versa).
+  Both now report the effective configuration: the env-var switch, the
+  hardcoded fail-open, the vault path, the tokenized fields, and the live
+  detection-pattern list.
 - Audited the non-lite commands for hints pointing at things that do not
   exist:
   - `status` could never report a healthy install: its settings check looked

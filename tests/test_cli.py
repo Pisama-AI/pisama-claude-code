@@ -235,6 +235,32 @@ class TestDetection:
         assert not [d for d in results if "loop" in d.get("type", "").lower()]
 
 
+class TestTokenizeConfig:
+    """tokenize config must report the switches that actually exist (the
+    PISAMA_TOKENIZATION env var, hardcoded fail-open), not the unread
+    config.json tokenization block it used to display."""
+
+    def test_reports_env_var_switch(self, monkeypatch):
+        from pisama_claude_code.cli import tokenize_config
+
+        monkeypatch.delenv("PISAMA_TOKENIZATION", raising=False)
+        result = CliRunner().invoke(tokenize_config)
+        assert result.exit_code == 0
+        assert "PISAMA_TOKENIZATION" in result.output
+        assert "Enabled: True" in result.output
+        assert "Tokenized fields:" in result.output
+        assert "tool_input" in result.output
+        assert "Custom Patterns" not in result.output
+
+    def test_disabled_via_env(self, monkeypatch):
+        from pisama_claude_code.cli import tokenize_config
+
+        monkeypatch.setenv("PISAMA_TOKENIZATION", "0")
+        result = CliRunner().invoke(tokenize_config)
+        assert result.exit_code == 0
+        assert "Enabled: False" in result.output
+
+
 if __name__ == "__main__":
     import pytest
     pytest.main([__file__, "-v"])
