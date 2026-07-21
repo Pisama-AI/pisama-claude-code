@@ -155,11 +155,14 @@ class LiteRunner:
             return True  # empty list = all enabled
         return name in self.config.enabled_detectors
 
-    def analyze_trace_file(self, trace_path: Path) -> Dict[str, Any]:
+    def analyze_trace_file(
+        self, trace_path: Path, session_id: Optional[str] = None
+    ) -> Dict[str, Any]:
         """Run detectors on a trace file (JSON or JSONL).
 
         Args:
             trace_path: Path to a .json or .jsonl trace file.
+            session_id: Session identifier; defaults to the file stem.
 
         Returns:
             Summary dict with keys: session_id, file, entries_count,
@@ -203,8 +206,7 @@ class LiteRunner:
                 "detectors_run": [],
             }
 
-        session_id = str(trace_path.stem)
-        return self.analyze_data(entries, session_id=session_id)
+        return self.analyze_data(entries, session_id=session_id or str(trace_path.stem))
 
     def analyze_data(
         self, entries: List[Dict[str, Any]], session_id: str = ""
@@ -239,6 +241,13 @@ class LiteRunner:
         if self._detector_enabled("repetition"):
             detectors_run.append("repetition")
             all_detections.extend(self._detect_repetition(entries, trace_id, session_id))
+
+        # Drop positives below the configured severity floor (negatives are kept
+        # so the dashboard can still show coverage)
+        all_detections = [
+            d for d in all_detections
+            if not d.detected or d.severity >= self.config.severity_threshold
+        ]
 
         # Store results
         if all_detections:

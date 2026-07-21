@@ -721,6 +721,36 @@ class TestLiteRunnerGeneral:
         result = runner.analyze_trace_file(trace_file)
         assert result["entries_count"] == 2
 
+    def test_analyze_trace_file_custom_session_id(self, tmp_path):
+        db_path = tmp_path / "test.db"
+        config = LiteConfig(db_path=db_path)
+        runner = LiteRunner(config)
+
+        trace_file = tmp_path / "trace.json"
+        trace_file.write_text(
+            json.dumps([{"tool_name": "read", "tool_input": {"file": "a.py"}}])
+        )
+        result = runner.analyze_trace_file(trace_file, session_id="my-session")
+        assert result["session_id"] == "my-session"
+        # Default falls back to the file stem
+        result = runner.analyze_trace_file(trace_file)
+        assert result["session_id"] == "trace"
+
+    def test_severity_threshold_filters_positives(self, tmp_path):
+        # 4 identical consecutive calls -> loop positive with severity 60
+        entries = [
+            {"tool_name": "search", "tool_input": {"q": "test"}} for _ in range(4)
+        ]
+
+        config = LiteConfig(db_path=tmp_path / "low.db", severity_threshold=40)
+        assert LiteRunner(config).analyze_data(entries, session_id="s")["detection_count"] > 0
+
+        config = LiteConfig(db_path=tmp_path / "high.db", severity_threshold=90)
+        runner = LiteRunner(config)
+        result = runner.analyze_data(entries, session_id="s")
+        assert result["detection_count"] == 0
+        assert runner.storage.get_detections(session_id="s", detected_only=True) == []
+
     def test_analyze_trace_file_not_found(self, tmp_path):
         db_path = tmp_path / "test.db"
         config = LiteConfig(db_path=db_path)

@@ -2332,7 +2332,7 @@ def lite():
         pisama-cc lite init       Initialize lite mode config
         pisama-cc lite analyze    Analyze a trace file
         pisama-cc lite dashboard  View detection summary
-        pisama-cc lite export     Export results for platform import
+        pisama-cc lite export     Export results to a local JSON file
     """
     pass
 
@@ -2460,7 +2460,7 @@ def lite_analyze(
     click.echo("=" * 55)
 
     try:
-        result = runner.analyze_trace_file(path)
+        result = runner.analyze_trace_file(path, session_id=session_id)
     except Exception as e:
         click.echo(f"Error analyzing trace file: {e}")
         return
@@ -2508,8 +2508,7 @@ def lite_analyze(
 
 
 @lite.command("dashboard")
-@click.option("--session", help="Filter by session ID")
-def lite_dashboard(session: Optional[str]):
+def lite_dashboard():
     """Show detection summary dashboard.
 
     Displays aggregate statistics, recent detections, and
@@ -2517,7 +2516,6 @@ def lite_dashboard(session: Optional[str]):
 
     Examples:
         pisama-cc lite dashboard
-        pisama-cc lite dashboard --session abc123
     """
     try:
         from .lite import LiteRunner

@@ -8,6 +8,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
+- Audited every lite command for advertised behavior that did not exist:
+  - `lite analyze --session-id` was accepted but silently ignored (the session
+    id was always the trace file's stem). It is now passed through to the
+    runner.
+  - `lite init --severity-threshold` was saved to config and printed back, but
+    nothing ever read it. Positive detections below the threshold are now
+    dropped (not reported, not stored). No behavior change at the default of
+    40: every lite detector's minimum positive severity is 48 or higher.
+  - `lite dashboard --session` claimed to filter by session id but was never
+    wired to anything; the dashboard is always global. The option is removed
+    rather than half-implemented (aggregate stats have no per-session query),
+    so passing it now errors instead of silently doing nothing.
+  - The `lite` group help still advertised `export` as "Export results for
+    platform import"; it now matches the corrected command ("Export results
+    to a local JSON file").
 - `lite export` no longer prints a curl example against `/v1/import/lite`,
   an endpoint that does not exist on the platform (and whose nearest real
   route, `POST /api/v1/import-jobs`, ingests raw trace files under JWT auth,
