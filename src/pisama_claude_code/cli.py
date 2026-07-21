@@ -2604,10 +2604,15 @@ def lite_dashboard(session: Optional[str]):
     help="Export format (default: json)",
 )
 def lite_export(output: str, fmt: str):
-    """Export detection results for platform import.
+    """Export detection results to a local JSON file.
 
-    Creates a JSON file that can be imported into the Pisama platform
-    for advanced analysis, team dashboards, and historical tracking.
+    Creates a JSON snapshot of lite mode results (detections and scores)
+    for backup or your own analysis. The platform has no importer for this
+    file. To get sessions into the Pisama platform, connect and sync the
+    captured traces instead; the platform re-runs full detection on them:
+
+        pisama-cc connect --api-key <key>
+        pisama-cc sync
 
     Examples:
         pisama-cc lite export
@@ -2638,14 +2643,11 @@ def lite_export(output: str, fmt: str):
     click.echo(f"Exported {count} detection(s) to {output_path}")
     click.echo("")
 
-    if count > 0 and config.platform_url:
-        click.echo("To import into Pisama platform:")
-        click.echo(f"   curl -X POST {config.platform_url}/v1/import/lite \\")
-        click.echo("     -H 'Authorization: Bearer <api-key>' \\")
-        click.echo(f"     -F 'file=@{output_path}'")
-    elif count > 0:
-        click.echo("Connect to platform to import:")
-        click.echo("   pisama-cc lite init  (set platform_url in config)")
+    if count > 0:
+        click.echo("To get these sessions into the Pisama platform, sync the")
+        click.echo("captured traces (the platform re-runs full detection on them):")
+        click.echo("   pisama-cc connect --api-key <key>")
+        click.echo("   pisama-cc sync")
 
 
 if __name__ == "__main__":
