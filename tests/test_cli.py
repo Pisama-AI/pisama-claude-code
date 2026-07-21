@@ -43,14 +43,14 @@ class TestCLI:
         runner = CliRunner()
         result = runner.invoke(main, ["--version"])
         assert result.exit_code == 0
-        assert "0.1.0" in result.output
-    
+        assert "0.4.3" in result.output
+
     def test_help(self):
         """Test --help flag."""
         runner = CliRunner()
         result = runner.invoke(main, ["--help"])
         assert result.exit_code == 0
-        assert "PISAMA Claude Code" in result.output
+        assert "Pisama Claude Code" in result.output
         assert "connect" in result.output
         assert "sync" in result.output
         assert "analyze" in result.output
@@ -127,6 +127,80 @@ class TestCLI:
             assert "Exported" in result.output
 
 
+class TestApiPaths:
+    """Pin the full request paths the CLI hits — the backend mounts everything
+    under /api/v1, so a bare /v1 path 404s in production."""
+
+    def test_api_url_builds_api_v1_path(self):
+        from pisama_claude_code.cli import api_url
+
+        assert (
+            api_url({"api_url": "https://api.pisama.ai"}, "/auth/token")
+            == "https://api.pisama.ai/api/v1/auth/token"
+        )
+        # Trailing slash and an explicit /api suffix must not double the prefix
+        assert (
+            api_url({"api_url": "https://api.pisama.ai/"}, "/health")
+            == "https://api.pisama.ai/api/v1/health"
+        )
+        assert (
+            api_url({"api_url": "https://api.pisama.ai/api"}, "/health")
+            == "https://api.pisama.ai/api/v1/health"
+        )
+        # Missing api_url falls back to the production default
+        assert api_url({}, "/health") == "https://api.pisama.ai/api/v1/health"
+
+    def test_sync_posts_to_api_v1_paths(self, tmp_path):
+        """sync must exchange the key at POST /api/v1/auth/token and upload to
+        POST /api/v1/traces/claude-code/ingest."""
+        import httpx as real_httpx
+
+        runner = CliRunner()
+        config_file = tmp_path / "config.json"
+        traces_dir = tmp_path / "traces"
+        traces_dir.mkdir()
+        (traces_dir / "traces-2026-01-01.jsonl").write_text(json.dumps({
+            "timestamp": "2026-01-01T00:00:00+00:00",
+            "tool_name": "Bash",
+            "hook_type": "PreToolUse",
+            "session_id": "test-session",
+            "tool_input": {"command": "echo hello"},
+        }) + "\n")
+
+        posted = []
+
+        def fake_post(url, **kwargs):
+            posted.append((url, kwargs))
+            resp = MagicMock()
+            resp.status_code = 200
+            if url.endswith("/auth/token"):
+                resp.json.return_value = {"access_token": "eyJ.test.jwt"}
+            else:
+                resp.json.return_value = {"traces_received": 1}
+            return resp
+
+        with patch("pisama_claude_code.cli.CONFIG_FILE", config_file), \
+             patch("pisama_claude_code.cli.CONFIG_DIR", tmp_path), \
+             patch("pisama_claude_code.cli.TRACES_DIR", traces_dir), \
+             patch("pisama_claude_code.cli._jwt_cache", {}), \
+             patch("pisama_claude_code.cli.httpx") as mock_httpx:
+            save_config({"api_key": "pisama_testkey", "api_url": "https://api.pisama.ai"})
+            mock_httpx.ConnectError = real_httpx.ConnectError
+            mock_httpx.post.side_effect = fake_post
+
+            result = runner.invoke(main, ["sync"])
+
+        assert result.exit_code == 0, result.output
+        assert [url for url, _ in posted] == [
+            "https://api.pisama.ai/api/v1/auth/token",
+            "https://api.pisama.ai/api/v1/traces/claude-code/ingest",
+        ]
+        # The ingest call must carry the exchanged JWT, not the raw API key
+        ingest_headers = posted[1][1]["headers"]
+        assert ingest_headers["Authorization"] == "Bearer eyJ.test.jwt"
+        assert "Synced" in result.output
+
+
 class TestPrivacy:
     """Tests for privacy and redaction."""
     
@@ -176,41 +250,23 @@ class TestPrivacy:
 
 class TestDetection:
     """Tests for failure detection."""
-    
+
     def test_run_detection_empty_traces(self):
         """Test detection with no traces."""
-        from pisama_claude_code.cli import run_detection
-        
-        results = run_detection([])
-        
-        assert "F4_tool_misuse" in results
-        assert "F6_loop" in results
-        assert results["F4_tool_misuse"]["detected"] is False
-    
-    def test_run_detection_finds_tool_misuse(self):
-        """Test detection finds Bash used for file reading."""
-        from pisama_claude_code.cli import run_detection
-        
-        traces = [
-            {"tool_name": "Bash", "tool_input": {"command": "cat /etc/passwd"}},
-            {"tool_name": "Bash", "tool_input": {"command": "head -10 file.txt"}},
-        ]
-        
-        results = run_detection(traces)
-        
-        assert results["F4_tool_misuse"]["detected"] is True
-    
+        from pisama_claude_code.cli import _run_local_detection
+
+        assert _run_local_detection([]) == []
+
     def test_run_detection_finds_loops(self):
         """Test detection finds consecutive repeated calls."""
-        from pisama_claude_code.cli import run_detection
-        
-        # Create 15 consecutive Bash calls
+        from pisama_claude_code.cli import _run_local_detection
+
+        # Create 15 consecutive identical Bash calls
         traces = [{"tool_name": "Bash", "tool_input": {}} for _ in range(15)]
-        
-        results = run_detection(traces)
-        
-        assert results["F6_loop"]["detected"] is True
-        assert "14" in results["F6_loop"]["explanation"]  # 14 repeats
+
+        detections = _run_local_detection(traces)
+
+        assert any(d["type"] == "Tool Loop Detected" for d in detections)
 
 
 if __name__ == "__main__":

@@ -52,6 +52,11 @@ CONFIG_FILE = CONFIG_DIR / "config.json"
 TRACES_DIR = CONFIG_DIR / "traces"
 HOOKS_DIR = CLAUDE_DIR / "hooks"
 
+# The Pisama v1 API is mounted under /api/v1. Auth is JWT: exchange the API key
+# for a short-lived token, then send it as a Bearer credential.
+API_PREFIX = "/api/v1"
+DEFAULT_API_URL = "https://api.pisama.ai"
+
 
 def get_config() -> dict:
     """Load PISAMA config."""
@@ -67,6 +72,16 @@ def save_config(config: dict):
     """Save PISAMA config."""
     CONFIG_DIR.mkdir(parents=True, exist_ok=True)
     CONFIG_FILE.write_text(json.dumps(config, indent=2))
+
+
+def api_url(config: dict, path: str) -> str:
+    """Build a full API URL for `path` (e.g. '/traces/claude-code/ingest').
+
+    Tolerates an api_url that already includes a trailing '/api'."""
+    base = (config.get("api_url") or DEFAULT_API_URL).rstrip("/")
+    if base.endswith("/api"):
+        base = base[: -len("/api")]
+    return f"{base}{API_PREFIX}{path}"
 
 
 _jwt_cache: dict = {}
@@ -90,7 +105,7 @@ def _bearer(config: dict) -> str:
     if httpx is not None:
         try:
             resp = httpx.post(
-                f"{config['api_url']}/v1/auth/token",
+                api_url(config, "/auth/token"),
                 json={"api_key": key},
                 timeout=15,
             )
@@ -433,9 +448,9 @@ def _truncate(text: str, max_len: int = 200) -> str:
 
 @main.command()
 @click.option("--api-key", required=True, help="Your Pisama API key")
-@click.option("--api-url", default="https://api.pisama.ai", help="API base URL")
+@click.option("--api-url", "api_url_opt", default=DEFAULT_API_URL, help="API base URL")
 @click.option("--auto-sync/--no-auto-sync", default=True, help="Enable auto-sync")
-def connect(api_key: str, api_url: str, auto_sync: bool):
+def connect(api_key: str, api_url_opt: str, auto_sync: bool):
     """Connect to PISAMA platform."""
     if httpx is None:
         click.echo("❌ httpx required. Run: pip install httpx")
@@ -446,7 +461,7 @@ def connect(api_key: str, api_url: str, auto_sync: bool):
     # Validate API key
     try:
         response = httpx.get(
-            f"{api_url}/v1/health",
+            api_url({"api_url": api_url_opt}, "/health"),
             headers={"Authorization": f"Bearer {api_key}"},
             timeout=10,
         )
@@ -454,18 +469,18 @@ def connect(api_key: str, api_url: str, auto_sync: bool):
             click.echo("❌ Invalid API key")
             return
     except httpx.ConnectError:
-        click.echo(f"⚠️  Could not reach {api_url} - saving config for later")
+        click.echo(f"⚠️  Could not reach {api_url_opt} - saving config for later")
 
     # Save config
     config = get_config()
     config["api_key"] = api_key
-    config["api_url"] = api_url
+    config["api_url"] = api_url_opt
     config["auto_sync"] = auto_sync
     config["connected_at"] = datetime.now(timezone.utc).isoformat()
     save_config(config)
 
     click.echo("✅ Connected to PISAMA platform")
-    click.echo(f"   API URL: {api_url}")
+    click.echo(f"   API URL: {api_url_opt}")
     click.echo(f"   Auto-sync: {'enabled' if auto_sync else 'disabled'}")
 
     click.echo("\n📡 You can now:")
@@ -505,7 +520,7 @@ def sync(last: int, include_outputs: bool):
     # Upload
     try:
         response = httpx.post(
-            f"{config['api_url']}/v1/traces/claude-code/ingest",
+            api_url(config, "/traces/claude-code/ingest"),
             headers={
                 "Authorization": f"Bearer {_bearer(config)}",
                 "Content-Type": "application/json",
@@ -564,7 +579,7 @@ def analyze(last: int):
     try:
         payload = prepare_sync_payload(traces_list, include_outputs=False)
         response = httpx.post(
-            f"{config['api_url']}/v1/traces/claude-code/analyze",
+            api_url(config, "/traces/claude-code/analyze"),
             headers={
                 "Authorization": f"Bearer {_bearer(config)}",
                 "Content-Type": "application/json",
@@ -645,9 +660,9 @@ def fix_list(detection_id: Optional[str]):
 
     try:
         # Get recent detections with fixes
-        endpoint = f"{config['api_url']}/v1/detections"
+        endpoint = api_url(config, "/detections")
         if detection_id:
-            endpoint = f"{config['api_url']}/v1/detections/{detection_id}/fixes"
+            endpoint = api_url(config, f"/detections/{detection_id}/fixes")
 
         response = httpx.get(
             endpoint,
@@ -700,7 +715,7 @@ def fix_show(fix_id: str, detection_id: str):
 
     try:
         response = httpx.get(
-            f"{config['api_url']}/v1/detections/{detection_id}/fixes",
+            api_url(config, f"/detections/{detection_id}/fixes"),
             headers={"Authorization": f"Bearer {_bearer(config)}"},
             timeout=30,
         )
@@ -794,7 +809,7 @@ def fix_apply(fix_id: str, detection_id: str, dry_run: bool, force: bool):
     try:
         # First, get the fix details
         response = httpx.get(
-            f"{config['api_url']}/v1/detections/{detection_id}/fixes",
+            api_url(config, f"/detections/{detection_id}/fixes"),
             headers={"Authorization": f"Bearer {_bearer(config)}"},
             timeout=30,
         )
@@ -852,7 +867,7 @@ def fix_apply(fix_id: str, detection_id: str, dry_run: bool, force: bool):
 
         # Apply the fix via API
         apply_response = httpx.post(
-            f"{config['api_url']}/v1/detections/{detection_id}/fixes/{fix_id}/apply",
+            api_url(config, f"/detections/{detection_id}/fixes/{fix_id}/apply"),
             headers={"Authorization": f"Bearer {_bearer(config)}"},
             timeout=30,
         )
