@@ -110,6 +110,29 @@ def test_full_install_then_verify(tmp_path, monkeypatch):
 
 
 @_unix_only
+def test_status_reports_canonical_hooks(tmp_path, monkeypatch):
+    """status must recognize what install actually writes: the PostToolUse +
+    Stop events and the canonical hook files, not the stale
+    PreToolCall/PostToolCall names and legacy pisama-pre.sh it checked before."""
+    from click.testing import CliRunner
+
+    import pisama_claude_code.cli as cli
+
+    monkeypatch.setenv("HOME", str(tmp_path))
+    install.install(force=True, auto_config=True)
+
+    monkeypatch.setattr(cli, "HOOKS_DIR", tmp_path / ".claude" / "hooks")
+    monkeypatch.setattr(cli, "TRACES_DIR", tmp_path / "traces")
+
+    result = CliRunner().invoke(cli.status)
+    assert result.exit_code == 0
+    assert "Pisama hooks configured in settings" in result.output
+    assert "hooks not in settings" not in result.output
+    assert "pisama-pre.sh" not in result.output
+    assert "(missing)" not in result.output
+
+
+@_unix_only
 def test_uninstall_strips_settings(tmp_path, monkeypatch):
     monkeypatch.setenv("HOME", str(tmp_path))
     install.install(force=True, auto_config=True)

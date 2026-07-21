@@ -161,8 +161,8 @@ def get_jwt(config: dict) -> Optional[str]:
 def _dashboard_url(config: dict) -> str:
     """Human URL where ingested traces show up."""
     base = (config.get("api_url") or DEFAULT_API_URL).rstrip("/")
-    base = base.replace("://api.", "://app.")
-    return base
+    base = base.replace("://api.", "://")
+    return base + "/traces"
 
 
 # The backend caps the ingest body; stay safely under it. Large sessions are
@@ -344,7 +344,7 @@ def main():
     pass
 
 
-GITHUB_URL = "https://github.com/tn-pisama/pisama-claude-code"
+GITHUB_URL = "https://github.com/Pisama-AI/pisama-claude-code"
 
 
 @main.command()
@@ -790,7 +790,7 @@ def analyze(last: int):
         click.echo("   • Self-healing capabilities")
         click.echo("")
         click.echo("Run: pisama-cc connect --api-key <your-key>")
-        click.echo("Get your key at: https://app.pisama.ai/settings/api")
+        click.echo("Get your key at: https://pisama.ai/settings/api-keys")
         return
 
     click.echo(f"🔍 Analyzing last {last} traces...")
@@ -853,7 +853,7 @@ def display_analysis_results(results: dict):
     # Summary
     click.echo("\n" + "─" * 50)
     click.echo(f"Found {len(detections)} issue(s)")
-    click.echo(f"View details at: {results.get('dashboard_url', 'https://app.pisama.ai')}")
+    click.echo(f"View details at: {results.get('dashboard_url', 'https://pisama.ai/dashboard')}")
 
 
 # =============================================================================
@@ -1135,8 +1135,9 @@ def status():
     click.echo("\n🔧 Hook Installation:")
     hook_files = [
         "pisama-capture.py",
-        "pisama-pre.sh",
+        "pisama-forward.py",
         "pisama-post.sh",
+        "pisama-forward.sh",
     ]
     hooks_installed = 0
     for hf in hook_files:
@@ -1214,19 +1215,20 @@ def status():
         try:
             settings = json.loads(settings_file.read_text())
             hooks = settings.get("hooks", {})
-            pre_hooks = hooks.get("PreToolCall", [])
-            post_hooks = hooks.get("PostToolCall", [])
+            capture_groups = hooks.get("PostToolUse", [])
+            forward_groups = hooks.get("Stop", [])
 
-            pisama_in_pre = any("pisama" in str(h).lower() for h in pre_hooks)
-            pisama_in_post = any("pisama" in str(h).lower() for h in post_hooks)
+            pisama_capture = any("pisama" in str(h).lower() for h in capture_groups)
+            pisama_forward = any("pisama" in str(h).lower() for h in forward_groups)
 
-            if pisama_in_pre and pisama_in_post:
+            if pisama_capture and pisama_forward:
                 click.echo("   ✅ Pisama hooks configured in settings")
-            elif pisama_in_pre or pisama_in_post:
+            elif pisama_capture or pisama_forward:
                 click.echo("   ⚠️  Pisama hooks partially configured")
+                click.echo("   Run 'pisama-cc install --force' to repair them")
             else:
                 click.echo("   ❌ Pisama hooks not in settings")
-                click.echo("   Add hooks to settings.local.json (see 'pisama-cc install' output)")
+                click.echo("   Run 'pisama-cc install' to configure them")
         except json.JSONDecodeError:
             click.echo("   ⚠️  Could not parse settings file")
     else:

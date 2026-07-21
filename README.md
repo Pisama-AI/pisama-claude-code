@@ -3,10 +3,10 @@
 > Lightweight trace capture for Claude Code sessions with token usage and cost tracking.
 
 [![PyPI version](https://img.shields.io/pypi/v/pisama-claude-code.svg)](https://pypi.org/project/pisama-claude-code/)
-[![GitHub stars](https://img.shields.io/github/stars/tn-pisama/pisama-claude-code?style=social)](https://github.com/tn-pisama/pisama-claude-code)
+[![GitHub stars](https://img.shields.io/github/stars/Pisama-AI/pisama-claude-code?style=social)](https://github.com/Pisama-AI/pisama-claude-code)
 [![Python versions](https://img.shields.io/pypi/pyversions/pisama-claude-code.svg)](https://pypi.org/project/pisama-claude-code/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-[![CI](https://github.com/tn-pisama/pisama-claude-code/actions/workflows/ci.yml/badge.svg)](https://github.com/tn-pisama/pisama-claude-code/actions/workflows/ci.yml)
+[![CI](https://github.com/Pisama-AI/pisama-claude-code/actions/workflows/ci.yml/badge.svg)](https://github.com/Pisama-AI/pisama-claude-code/actions/workflows/ci.yml)
 [![Downloads](https://static.pepy.tech/badge/pisama-claude-code)](https://pepy.tech/project/pisama-claude-code)
 [![Downloads/month](https://img.shields.io/pypi/dm/pisama-claude-code)](https://pypistats.org/packages/pisama-claude-code)
 [![Code style: ruff](https://img.shields.io/badge/code%20style-ruff-000000.svg)](https://github.com/astral-sh/ruff)
@@ -240,12 +240,12 @@ Platform features:
 | Framework | Package | Status |
 |-----------|---------|--------|
 | Claude Code | `pisama-claude-code` | Stable |
-| LangChain/LangGraph | `mao-testing` SDK | Available |
-| CrewAI | `mao-testing` SDK | Available |
-| AutoGen | `mao-testing` SDK | Available |
-| n8n | `mao-testing` SDK | Available |
+| LangChain/LangGraph | `pisama-core` SDK | Available |
+| CrewAI | `pisama-core` SDK | Available |
+| AutoGen | `pisama-core` SDK | Available |
+| n8n | `pisama-core` SDK | Available |
 
-For other frameworks, see the [mao-testing SDK](https://github.com/tn-pisama/mao-testing).
+For other frameworks, see the [Pisama integration docs](https://docs.pisama.ai/integrations).
 
 ## Contributing
 
@@ -253,7 +253,7 @@ We welcome contributions! See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
 
 ```bash
 # Development setup
-git clone https://github.com/tn-pisama/pisama-claude-code.git
+git clone https://github.com/Pisama-AI/pisama-claude-code.git
 cd pisama-claude-code
 python -m venv .venv
 source .venv/bin/activate
@@ -278,8 +278,8 @@ MIT License - see [LICENSE](LICENSE) for details.
 
 - [Documentation](https://docs.pisama.ai/claude-code)
 - [Pisama Platform](https://pisama.ai)
-- [Issue Tracker](https://github.com/tn-pisama/pisama-claude-code/issues)
-- [Discussions](https://github.com/tn-pisama/pisama-claude-code/discussions)
+- [Issue Tracker](https://github.com/Pisama-AI/pisama-claude-code/issues)
+- [Discussions](https://github.com/Pisama-AI/pisama-claude-code/discussions)
 
 ---
 

@@ -8,6 +8,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
+- Audited the non-lite commands for hints pointing at things that do not
+  exist:
+  - `status` could never report a healthy install: its settings check looked
+    for the stale `PreToolCall`/`PostToolCall` event names that the fixed
+    installer explicitly strips (the real events are `PostToolUse` + `Stop`),
+    and its file check demanded the legacy `pisama-pre.sh` while missing the
+    `pisama-forward.py`/`pisama-forward.sh` pair the installer actually
+    writes. Every healthy install was told "hooks not in settings" and
+    prompted to reinstall in a loop. Both checks now mirror what `install`
+    writes (and what `verify` checks).
+  - `sync` printed "View at:" with an `app.pisama.ai` URL, and `analyze`
+    pointed at `https://app.pisama.ai/settings/api` for API keys. The
+    `app.pisama.ai` host does not resolve at all; the dashboard lives at
+    `pisama.ai` and the API-keys page is `/settings/api-keys`. All three
+    sites (including the analyze fallback dashboard URL) now point at real
+    pages (`pisama.ai/traces`, `pisama.ai/settings/api-keys`,
+    `pisama.ai/dashboard`).
+  - The "Star us on GitHub" URL, README badges/links, and `pyproject.toml`
+    project URLs still pointed at the pre-transfer `tn-pisama` org; now
+    `Pisama-AI`. The README's framework table referenced a `mao-testing` SDK
+    whose repo link 404s (pre-rebrand name); it now names the real
+    `pisama-core` SDK and links the live integration docs. The pyproject
+    Documentation URL now goes straight to `docs.pisama.ai/claude-code`.
 - Audited every lite command for advertised behavior that did not exist:
   - `lite analyze --session-id` was accepted but silently ignored (the session
     id was always the trace file's stem). It is now passed through to the
