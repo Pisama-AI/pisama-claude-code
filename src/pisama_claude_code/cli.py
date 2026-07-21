@@ -805,7 +805,7 @@ def analyze(last: int):
     try:
         payload = prepare_sync_payload(traces_list, include_outputs=False)
         response = httpx.post(
-            f"{config['api_url']}/v1/traces/claude-code/analyze",
+            api_url(config, "/traces/claude-code/analyze"),
             headers={
                 "Authorization": f"Bearer {get_jwt(config) or config['api_key']}",
                 "Content-Type": "application/json",
@@ -886,9 +886,9 @@ def fix_list(detection_id: Optional[str]):
 
     try:
         # Get recent detections with fixes
-        endpoint = f"{config['api_url']}/v1/detections"
+        endpoint = api_url(config, "/detections")
         if detection_id:
-            endpoint = f"{config['api_url']}/v1/detections/{detection_id}/fixes"
+            endpoint = api_url(config, f"/detections/{detection_id}/fixes")
 
         response = httpx.get(
             endpoint,
@@ -941,7 +941,7 @@ def fix_show(fix_id: str, detection_id: str):
 
     try:
         response = httpx.get(
-            f"{config['api_url']}/v1/detections/{detection_id}/fixes",
+            api_url(config, f"/detections/{detection_id}/fixes"),
             headers={"Authorization": f"Bearer {get_jwt(config) or config['api_key']}"},
             timeout=30,
         )
@@ -1035,7 +1035,7 @@ def fix_apply(fix_id: str, detection_id: str, dry_run: bool, force: bool):
     try:
         # First, get the fix details
         response = httpx.get(
-            f"{config['api_url']}/v1/detections/{detection_id}/fixes",
+            api_url(config, f"/detections/{detection_id}/fixes"),
             headers={"Authorization": f"Bearer {get_jwt(config) or config['api_key']}"},
             timeout=30,
         )
@@ -1093,7 +1093,7 @@ def fix_apply(fix_id: str, detection_id: str, dry_run: bool, force: bool):
 
         # Apply the fix via API
         apply_response = httpx.post(
-            f"{config['api_url']}/v1/detections/{detection_id}/fixes/{fix_id}/apply",
+            api_url(config, f"/detections/{detection_id}/fixes/{fix_id}/apply"),
             headers={"Authorization": f"Bearer {get_jwt(config) or config['api_key']}"},
             timeout=30,
         )

@@ -281,3 +281,86 @@ def test_forward_hook_forwards_when_connected(tmp_path, monkeypatch):
     span = payload["resourceSpans"][0]["scopeSpans"][0]["spans"][0]
     attr_keys = {a["key"] for a in span["attributes"]}
     assert "gen_ai.state" in attr_keys
+
+
+def test_analyze_posts_to_api_v1_path(tmp_path, monkeypatch):
+    """analyze must hit POST /api/v1/traces/claude-code/analyze — the backend
+    mounts everything under /api/v1, so a bare /v1 path 404s in production."""
+    from click.testing import CliRunner
+
+    traces_dir = tmp_path / "traces"
+    traces_dir.mkdir()
+    (traces_dir / "traces-2026-01-01.jsonl").write_text(
+        _record("s1", "Bash", "OUT1", "2026-01-01T00:00:01+00:00") + "\n"
+    )
+    monkeypatch.setattr(cli, "TRACES_DIR", traces_dir)
+    monkeypatch.setattr(cli, "CONFIG_FILE", tmp_path / "config.json")
+    monkeypatch.setattr(cli, "CONFIG_DIR", tmp_path)
+    cli.save_config({"api_key": "pisama_x", "api_url": "http://localhost:8000"})
+
+    token = _jwt(99999999999)
+    captured = {}
+
+    def fake_post(url, **kw):
+        if url.endswith("/auth/token"):
+            r = MagicMock(status_code=200)
+            r.json.return_value = {"access_token": token}
+            return r
+        captured["url"] = url
+        captured["headers"] = kw.get("headers")
+        r = MagicMock(status_code=200)
+        r.json.return_value = {"detections": [], "trace_count": 1}
+        return r
+
+    with patch.object(cli, "httpx") as mock_httpx:
+        mock_httpx.post.side_effect = fake_post
+        result = CliRunner().invoke(cli.main, ["analyze"])
+
+    assert result.exit_code == 0, result.output
+    assert captured["url"] == "http://localhost:8000/api/v1/traces/claude-code/analyze"
+    assert captured["headers"]["Authorization"] == f"Bearer {token}"
+
+
+def test_fix_commands_hit_api_v1_detections(tmp_path, monkeypatch):
+    """fix list/apply must hit /api/v1/detections/... — bare /v1 404s."""
+    from click.testing import CliRunner
+
+    monkeypatch.setattr(cli, "CONFIG_FILE", tmp_path / "config.json")
+    monkeypatch.setattr(cli, "CONFIG_DIR", tmp_path)
+    cli.save_config({"api_key": "pisama_x", "api_url": "http://localhost:8000"})
+
+    token = _jwt(99999999999)
+    urls = {"get": [], "post": []}
+
+    def fake_get(url, **kw):
+        urls["get"].append(url)
+        r = MagicMock(status_code=200)
+        r.json.return_value = {"suggestions": [{
+            "id": "FIX1", "title": "T", "fix_type": "prompt", "confidence": "high",
+        }]}
+        return r
+
+    def fake_post(url, **kw):
+        if url.endswith("/auth/token"):
+            r = MagicMock(status_code=200)
+            r.json.return_value = {"access_token": token}
+            return r
+        urls["post"].append(url)
+        r = MagicMock(status_code=200)
+        r.json.return_value = {"message": "ok"}
+        return r
+
+    with patch.object(cli, "httpx") as mock_httpx:
+        mock_httpx.get.side_effect = fake_get
+        mock_httpx.post.side_effect = fake_post
+        r1 = CliRunner().invoke(cli.main, ["fix", "list", "--detection-id", "DET1"])
+        r2 = CliRunner().invoke(
+            cli.main, ["fix", "apply", "FIX1", "--detection-id", "DET1", "--force"]
+        )
+
+    assert r1.exit_code == 0, r1.output
+    assert r2.exit_code == 0, r2.output
+    assert urls["get"][0] == "http://localhost:8000/api/v1/detections/DET1/fixes"
+    assert urls["post"][-1] == (
+        "http://localhost:8000/api/v1/detections/DET1/fixes/FIX1/apply"
+    )
