@@ -7,7 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.4] - 2026-07-23
+
+### Changed
+- Updated cost estimation for the active Claude Opus 4, Sonnet 5, Sonnet 4,
+  and Haiku 4 model families.
+- Accounted for the distinct 5-minute cache-write rate instead of charging
+  cache creation at the base input rate.
+- Added automatic handling for the temporary Sonnet 5 introductory price,
+  which ends September 1, 2026.
+
 ### Fixed
+- Removed the aiohttp application-key warning from the optional reasoning
+  proxy.
 - Audited the vault and tokenize commands. The vault surface checked out
   almost entirely (every pisama-core class, method, stats key, the
   `[TYPE:sess:random]` format hint, the `pisama-core[tokenization]` extra,

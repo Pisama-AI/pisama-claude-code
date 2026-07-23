@@ -452,6 +452,7 @@ def _maybe_decompress(raw: bytes, encoding: Optional[str]) -> bytes:
 def make_app(upstream: str = DEFAULT_UPSTREAM, forward: bool = True):
     if web is None:
         raise RuntimeError("aiohttp is required: pip install 'pisama-claude-code[proxy]'")
+    session_key = web.AppKey("session", aiohttp.ClientSession)
 
     async def handler(request: "web.Request") -> "web.StreamResponse":
         import time as _time
@@ -468,7 +469,7 @@ def make_app(upstream: str = DEFAULT_UPSTREAM, forward: bool = True):
         parsed_req = parse_request(body) if is_messages else {}
         started = _time.monotonic()
 
-        session: aiohttp.ClientSession = request.app["session"]
+        session = request.app[session_key]
         try:
             upstream_resp = await session.request(
                 request.method, url, headers=fwd_headers, data=body or None,
@@ -517,10 +518,10 @@ def make_app(upstream: str = DEFAULT_UPSTREAM, forward: bool = True):
             print(f"pisama proxy forward error: {e}", file=sys.stderr)
 
     async def _on_startup(app):
-        app["session"] = aiohttp.ClientSession(auto_decompress=False)
+        app[session_key] = aiohttp.ClientSession(auto_decompress=False)
 
     async def _on_cleanup(app):
-        await app["session"].close()
+        await app[session_key].close()
 
     app = web.Application(client_max_size=1024 ** 3)
     app.on_startup.append(_on_startup)
