@@ -17,6 +17,7 @@ Usage:
 import json
 import os
 import sys
+from datetime import date
 from typing import Any
 
 # PII Tokenization configuration
@@ -31,32 +32,60 @@ TOKENIZATION_FIELDS = [
     "ai_response",     # Legacy field
 ]
 
-# Claude model pricing (per 1M tokens) - as of Jan 2025
+# Anthropic API list pricing per 1M tokens, reviewed 2026-07-23.
 MODEL_PRICING = {
-    "claude-sonnet-4-20250514": {"input": 3.00, "output": 15.00, "cache_read": 0.30},
-    "claude-opus-4-5-20251101": {"input": 15.00, "output": 75.00, "cache_read": 1.50},
-    "claude-3-5-sonnet-20241022": {"input": 3.00, "output": 15.00, "cache_read": 0.30},
-    "claude-3-5-haiku-20241022": {"input": 0.80, "output": 4.00, "cache_read": 0.08},
-    # Fallback for unknown models
-    "default": {"input": 3.00, "output": 15.00, "cache_read": 0.30},
+    "opus-4": {"input": 5.00, "output": 25.00, "cache_read": 0.50, "cache_write": 6.25},
+    "sonnet-5-promo": {"input": 2.00, "output": 10.00, "cache_read": 0.20, "cache_write": 2.50},
+    "sonnet-5": {"input": 3.00, "output": 15.00, "cache_read": 0.30, "cache_write": 3.75},
+    "sonnet-4": {"input": 3.00, "output": 15.00, "cache_read": 0.30, "cache_write": 3.75},
+    "haiku-4": {"input": 1.00, "output": 5.00, "cache_read": 0.10, "cache_write": 1.25},
+    "sonnet-3.5": {"input": 3.00, "output": 15.00, "cache_read": 0.30, "cache_write": 3.75},
+    "haiku-3.5": {"input": 0.80, "output": 4.00, "cache_read": 0.08, "cache_write": 1.00},
+    "opus-4.1": {"input": 15.00, "output": 75.00, "cache_read": 1.50, "cache_write": 18.75},
+    "default": {"input": 3.00, "output": 15.00, "cache_read": 0.30, "cache_write": 3.75},
 }
+
+_MODEL_FAMILY_HINTS = (
+    (("opus-4-8", "opus-4-7", "opus-4-6", "opus-4-5"), "opus-4"),
+    (("opus-4-1",), "opus-4.1"),
+    (("sonnet-4",), "sonnet-4"),
+    (("haiku-4",), "haiku-4"),
+    (("3-5-sonnet",), "sonnet-3.5"),
+    (("3-5-haiku",), "haiku-3.5"),
+)
+
+
+def _pricing_for_model(model: str, today: date | None = None) -> dict[str, float]:
+    """Resolve a Claude model ID or alias to its current list pricing."""
+    normalized = model.lower()
+    if "sonnet-5" in normalized:
+        key = "sonnet-5-promo" if (today or date.today()) < date(2026, 9, 1) else "sonnet-5"
+    else:
+        key = next(
+            (
+                family
+                for hints, family in _MODEL_FAMILY_HINTS
+                if any(hint in normalized for hint in hints)
+            ),
+            "default",
+        )
+    return MODEL_PRICING[key]
 
 
 def calculate_cost(model: str, usage: dict) -> float:
     """Calculate cost in USD from token usage."""
-    pricing = MODEL_PRICING.get(model, MODEL_PRICING["default"])
+    pricing = _pricing_for_model(model)
 
     input_tokens = usage.get("input_tokens", 0)
     output_tokens = usage.get("output_tokens", 0)
     cache_read = usage.get("cache_read_input_tokens", 0)
     cache_create = usage.get("cache_creation_input_tokens", 0)
 
-    # Cache creation costs same as input
     cost = (
         (input_tokens / 1_000_000) * pricing["input"] +
         (output_tokens / 1_000_000) * pricing["output"] +
         (cache_read / 1_000_000) * pricing["cache_read"] +
-        (cache_create / 1_000_000) * pricing["input"]
+        (cache_create / 1_000_000) * pricing["cache_write"]
     )
     return round(cost, 6)
 

@@ -97,8 +97,9 @@ $ pisama-cc status
 
 🔧 Hook Installation:
    ✅ pisama-capture.py
-   ✅ pisama-pre.sh
    ✅ pisama-post.sh
+   ✅ pisama-forward.py
+   ✅ pisama-forward.sh
    All hooks installed
 
 📁 Local Traces: 1,400
@@ -163,16 +164,24 @@ OTEL export uses [GenAI semantic conventions](https://opentelemetry.io/docs/spec
 | `pisama-cc proxy status` / `uninstall` | Proxy health / teardown |
 | `pisama-cc vault status` | Show PII tokenization vault status (`[core]`) |
 
-## Model Pricing
+## Cost Estimates
 
-Supported models and pricing (per 1M tokens):
+Cost estimates use Anthropic's first-party API list prices per 1M tokens.
+The current active model families are:
 
-| Model | Input | Output | Cache Read |
-|-------|-------|--------|------------|
-| claude-opus-4-5 | $15.00 | $75.00 | $1.50 |
-| claude-sonnet-4 | $3.00 | $15.00 | $0.30 |
-| claude-3-5-sonnet | $3.00 | $15.00 | $0.30 |
-| claude-3-5-haiku | $0.80 | $4.00 | $0.08 |
+| Model family | Input | Output | Cache write | Cache read |
+|--------------|-------|--------|-------------|------------|
+| Claude Opus 4.5 to 4.8 | $5.00 | $25.00 | $6.25 | $0.50 |
+| Claude Sonnet 5 | $2.00 | $10.00 | $2.50 | $0.20 |
+| Claude Sonnet 4.5 to 4.6 | $3.00 | $15.00 | $3.75 | $0.30 |
+| Claude Haiku 4.5 | $1.00 | $5.00 | $1.25 | $0.10 |
+
+Sonnet 5 introductory pricing is applied through August 31, 2026, then
+automatically changes to $3 input, $15 output, $3.75 cache write, and $0.30
+cache read. Provider-specific discounts, batch pricing, long-context premiums,
+and regional pricing are not included. Check
+[Anthropic pricing](https://platform.claude.com/docs/en/about-claude/pricing)
+for the authoritative rates.
 
 ## Privacy & Security
 
