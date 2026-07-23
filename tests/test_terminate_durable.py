@@ -117,6 +117,31 @@ async def test_mid_severity_block_is_durable(temp_pisama_dir):
 
 
 @pytest.mark.asyncio
+async def test_analyze_persists_durable_block_on_real_detection(temp_pisama_dir):
+    """End-to-end: a REAL loop detection through analyze() (no manual
+    record_block) persists a durable record, and a FRESH guardian then re-blocks
+    a benign call. Proves persistence comes from analyze()'s should_block hook."""
+    g = Guardian(
+        config=GuardianConfig(enabled=True, mode="manual", pattern_window=20),
+        pisama_dir=temp_pisama_dir,
+    )
+    hook = {"tool_name": "Bash", "tool_input": {"command": "ls"}, "session_id": "real-persist"}
+    for _ in range(7):
+        r = await g.analyze(hook, session_id="real-persist")
+        if r.should_block:
+            break
+    # A durable record must exist purely from analyze() persisting on should_block.
+    assert ClaudeCodeAdapter(pisama_dir=temp_pisama_dir).get_block_record("real-persist") is not None
+    # Fresh guardian re-blocks a totally benign tool.
+    fresh = Guardian(config=GuardianConfig(enabled=True, mode="manual"), pisama_dir=temp_pisama_dir)
+    out = await fresh.analyze(
+        {"tool_name": "Read", "tool_input": {"file_path": "/tmp/z"}, "session_id": "real-persist"},
+        session_id="real-persist",
+    )
+    assert out.should_block is True
+
+
+@pytest.mark.asyncio
 async def test_repeated_blocks_escalate_to_durable_terminate(temp_pisama_dir):
     """Repeated blocked tool calls durably escalate BLOCK -> TERMINATE across
     fresh subprocesses (the in-memory EnforcementEngine never reaches TERMINATE)."""

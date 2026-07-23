@@ -202,22 +202,28 @@ class Guardian:
         # Calculate severity
         if detection_results:
             severity = self.scoring_engine.calculate_severity(detection_results)
+            # DetectionResult.evidence is a list[Evidence] (each with a
+            # .description), NOT a dict — calling .get() on it raised
+            # AttributeError on every real detection and dropped the run into the
+            # hook's allow path, silently defeating the block. Build the issue
+            # strings from the summary + evidence descriptions, de-duplicated
+            # (a detector's summary often repeats its first evidence line).
             issues = []
+            _seen: set = set()
+
+            def _add_issue(text: str) -> None:
+                if text and text not in _seen:
+                    _seen.add(text)
+                    issues.append(text)
+
             for result in detection_results:
                 if not result.detected:
                     continue
-                # DetectionResult.evidence is a list[Evidence] (each with a
-                # .description), NOT a dict — calling .get() on it raised
-                # AttributeError on every real detection and dropped the run into
-                # the hook's allow path, silently defeating the block. Build the
-                # issue strings from the summary + evidence descriptions.
-                if result.summary:
-                    issues.append(result.summary)
-                issues.extend(
-                    e.description for e in result.evidence if getattr(e, "description", None)
-                )
+                _add_issue(result.summary)
+                for e in result.evidence:
+                    _add_issue(getattr(e, "description", None))
                 if not result.summary and not result.evidence:
-                    issues.append(result.detector_name)
+                    _add_issue(result.detector_name)
         else:
             severity = 0
             issues = []
