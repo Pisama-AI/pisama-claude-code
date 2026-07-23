@@ -92,6 +92,54 @@ async def test_guardian_reblocks_terminated_session_without_detection(temp_pisam
 
 
 @pytest.mark.asyncio
+async def test_mid_severity_block_is_durable(temp_pisama_dir):
+    """A sev 60-79 manual block (enforcement level DIRECT, which inject_fix would
+    NOT persist) must still be durable: a fresh guardian re-blocks the session on
+    a benign call. Regression for the severity-band persistence hole."""
+    from pisama_claude_code.guardian import GuardianResult
+
+    guardian = Guardian(
+        config=GuardianConfig(enabled=True, mode="manual"),
+        pisama_dir=temp_pisama_dir,
+    )
+    # Directly drive the manual-mode handler at sev 70 (DIRECT level) to model a
+    # mid-severity block without depending on which detector produces 70.
+    result = guardian._handle_manual_mode(70, ["mid loop"], "break_loop", "mid-sess")
+    assert result.should_block is True
+    # Persist as analyze() would on should_block.
+    guardian.adapter.record_block("mid-sess", "block", 70, ["mid loop"], result.message)
+
+    # Fresh instance (fresh subprocess) must still see the block on a benign tool.
+    fresh = Guardian(config=GuardianConfig(enabled=True, mode="manual"), pisama_dir=temp_pisama_dir)
+    benign = {"tool_name": "Read", "tool_input": {"file_path": "/tmp/x"}, "session_id": "mid-sess"}
+    out = await fresh.analyze(benign, session_id="mid-sess")
+    assert out.should_block is True
+
+
+@pytest.mark.asyncio
+async def test_repeated_blocks_escalate_to_durable_terminate(temp_pisama_dir):
+    """Repeated blocked tool calls durably escalate BLOCK -> TERMINATE across
+    fresh subprocesses (the in-memory EnforcementEngine never reaches TERMINATE)."""
+    # Seed an initial block.
+    ClaudeCodeAdapter(pisama_dir=temp_pisama_dir).record_block(
+        "esc-sess", "block", 65, ["loop"], "blocked", block_count=1
+    )
+    levels = []
+    # Each fresh guardian.analyze on a benign tool = one re-block (agent kept going).
+    for _ in range(4):
+        g = Guardian(config=GuardianConfig(enabled=True, mode="manual"), pisama_dir=temp_pisama_dir)
+        out = await g.analyze(
+            {"tool_name": "Read", "tool_input": {}, "session_id": "esc-sess"},
+            session_id="esc-sess",
+        )
+        assert out.should_block is True
+        levels.append(ClaudeCodeAdapter(pisama_dir=temp_pisama_dir).get_block_record("esc-sess")["level"])
+    # Must have durably escalated to terminate by the cap.
+    assert "terminate" in levels
+    assert ClaudeCodeAdapter(pisama_dir=temp_pisama_dir).get_block_record("esc-sess")["level"] == "terminate"
+
+
+@pytest.mark.asyncio
 async def test_guardian_allows_unblocked_benign_session(temp_pisama_dir):
     """Sanity: a session with no durable block runs detection normally and a
     benign single Read does not block."""

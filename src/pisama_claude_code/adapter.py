@@ -158,7 +158,7 @@ class ClaudeCodeAdapter(PlatformAdapter):
             )
 
             if session_id:
-                self._record_block(session_id, "block", severity, issues, message)
+                self.record_block(session_id, "block", severity, issues, message)
 
             return InjectionResult(
                 success=True,
@@ -173,7 +173,7 @@ class ClaudeCodeAdapter(PlatformAdapter):
             print(message, file=sys.stderr)
 
             if session_id:
-                self._record_block(session_id, "terminate", severity, issues, message)
+                self.record_block(session_id, "terminate", severity, issues, message)
 
             return InjectionResult(
                 success=True,
@@ -291,25 +291,63 @@ class ClaudeCodeAdapter(PlatformAdapter):
 
     # -- durable block store --------------------------------------------------
 
-    def _record_block(
+    def record_block(
         self,
         session_id: str,
         level: str,
         severity: int,
         issues: list[str],
         message: str,
+        block_count: int = 1,
     ) -> None:
-        """Persist a durable block/terminate record for a session."""
+        """Persist a durable block/terminate record for a session.
+
+        Public so the guardian can persist a durable block keyed on its
+        should_block DECISION rather than on the enforcement-level name — a
+        sev 60-79 manual block maps to DIRECT, which would otherwise persist
+        nothing and let the session resume on the next call.
+        """
         store = self._load_blocked_store()
         store[session_id] = {
             "level": level,
             "severity": severity,
             "issues": list(issues or []),
             "message": message,
+            "block_count": block_count,
             "timestamp": datetime.now(timezone.utc).isoformat(),
         }
         self._save_blocked_store(store)
         self._blocked_sessions.add(session_id)
+
+    def escalate_block(
+        self, session_id: str, terminate_after: int = 3
+    ) -> Optional[dict]:
+        """Increment a session's block count; escalate to terminate at the cap.
+
+        Called on each re-block (a fresh tool call that hits the durable
+        short-circuit): the agent kept issuing tool calls while blocked. After
+        ``terminate_after`` re-blocks the record is upgraded to a durable
+        ``terminate`` — this is how TERMINATE becomes reachable across
+        subprocesses without the in-memory EnforcementEngine escalation (whose
+        violation state resets every subprocess and is never fed).
+        Returns the updated record, or None if the session has no record.
+        """
+        store = self._load_blocked_store()
+        rec = store.get(session_id)
+        if rec is None:
+            return None
+        rec["block_count"] = int(rec.get("block_count", 1)) + 1
+        if rec.get("level") != "terminate" and rec["block_count"] >= terminate_after:
+            rec["level"] = "terminate"
+            rec["message"] = (
+                "Session TERMINATED after repeated blocked tool calls "
+                f"({rec['block_count']}). No further actions permitted; "
+                "use /pisama-intervene to review."
+            )
+        store[session_id] = rec
+        self._save_blocked_store(store)
+        self._blocked_sessions.add(session_id)
+        return rec
 
     def _load_blocked_store(self) -> dict[str, dict]:
         """Load the durable block store; tolerate a missing/corrupt file."""

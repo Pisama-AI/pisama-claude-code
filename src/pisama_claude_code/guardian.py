@@ -23,6 +23,11 @@ from pisama_core.traces import Trace
 from pisama_claude_code.adapter import ClaudeCodeAdapter
 from pisama_claude_code.storage import TraceStorage
 
+# After this many repeated blocked tool calls in one session, a durable BLOCK is
+# escalated to a durable TERMINATE. Replaces the in-memory EnforcementEngine
+# escalation (which resets every subprocess and is never fed a violation count).
+TERMINATE_AFTER_REPEATED_BLOCKS = 3
+
 
 @dataclass
 class GuardianConfig:
@@ -152,10 +157,17 @@ class Guardian:
         # (the /pisama-intervene acknowledge flow).
         block_rec = self.adapter.get_block_record(session_id)
         if block_rec is not None:
+            # Repeated tool call while blocked -> bump the count and, past the
+            # cap, durably escalate BLOCK -> TERMINATE (reachable escalation that
+            # survives the fresh-subprocess model).
+            block_rec = self.adapter.escalate_block(
+                session_id, terminate_after=TERMINATE_AFTER_REPEATED_BLOCKS
+            ) or block_rec
             level = block_rec.get("level", "terminate")
             self.audit.log("durable_block", {
                 "session_id": session_id,
                 "level": level,
+                "block_count": block_rec.get("block_count"),
                 "action": "reblocked",
             })
             return GuardianResult(
@@ -192,8 +204,20 @@ class Guardian:
             severity = self.scoring_engine.calculate_severity(detection_results)
             issues = []
             for result in detection_results:
-                if result.detected:
-                    issues.extend(result.evidence.get("issues", []))
+                if not result.detected:
+                    continue
+                # DetectionResult.evidence is a list[Evidence] (each with a
+                # .description), NOT a dict — calling .get() on it raised
+                # AttributeError on every real detection and dropped the run into
+                # the hook's allow path, silently defeating the block. Build the
+                # issue strings from the summary + evidence descriptions.
+                if result.summary:
+                    issues.append(result.summary)
+                issues.extend(
+                    e.description for e in result.evidence if getattr(e, "description", None)
+                )
+                if not result.summary and not result.evidence:
+                    issues.append(result.detector_name)
         else:
             severity = 0
             issues = []
@@ -218,11 +242,25 @@ class Guardian:
         recommendation = self._get_recommendation(detection_results)
 
         if self.config.mode == "report":
-            return self._handle_report_mode(severity, issues, recommendation, session_id)
+            result = self._handle_report_mode(severity, issues, recommendation, session_id)
         elif self.config.mode == "auto":
-            return await self._handle_auto_mode(severity, issues, recommendation, session_id, trace, detection_results)
+            result = await self._handle_auto_mode(severity, issues, recommendation, session_id, trace, detection_results)
         else:  # manual
-            return self._handle_manual_mode(severity, issues, recommendation, session_id)
+            result = self._handle_manual_mode(severity, issues, recommendation, session_id)
+
+        # Persist a durable block keyed on the DECISION, not the enforcement
+        # level. A sev 60-79 manual block sets should_block=True but resolves to
+        # a DIRECT enforcement level, which inject_fix would not persist — so the
+        # next fresh subprocess would re-run detection and resume if it happened
+        # not to re-fire. Recording here makes every real block durable.
+        if result.should_block and session_id:
+            level = "terminate" if str(result.action_taken).startswith("terminate") else "block"
+            self.adapter.record_block(
+                session_id, level, severity, issues,
+                result.message or "Blocked by PISAMA detection",
+            )
+
+        return result
 
     def _get_recommendation(self, detection_results: list) -> str:
         """Determine recommended fix based on detection results."""

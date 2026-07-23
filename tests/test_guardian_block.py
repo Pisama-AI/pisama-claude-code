@@ -87,3 +87,58 @@ class _FakeStdin:
 
     def read(self) -> str:
         return self._data
+
+
+# --- REAL detection -> block path (no monkeypatch of analyze_sync) -----------
+#
+# Regression guard for the second crash on the detect->block path: guardian.py
+# built `issues` via result.evidence.get("issues"), but DetectionResult.evidence
+# is a list[Evidence] — every real detection raised AttributeError, which the
+# hook swallowed into the exit-0 allow path. These tests drive the REAL loop
+# detector (5+ consecutive identical tool calls = critical) so a genuine
+# detection reaches the block decision.
+
+import pytest
+
+from pisama_claude_code.guardian import Guardian, GuardianConfig
+
+
+@pytest.mark.asyncio
+async def test_real_loop_detection_blocks_without_crashing(temp_pisama_dir):
+    guardian = Guardian(
+        config=GuardianConfig(enabled=True, mode="manual", pattern_window=20),
+        pisama_dir=temp_pisama_dir,
+    )
+    hook = {
+        "tool_name": "Bash",
+        "tool_input": {"command": "ls -la"},
+        "session_id": "loop-sess",
+    }
+    blocked_any = False
+    # 5 consecutive identical Bash calls trip the loop detector's critical band.
+    for _ in range(7):
+        result = await guardian.analyze(hook, session_id="loop-sess")
+        # The fix: extracting issues from list[Evidence] must NOT raise.
+        assert isinstance(result.issues, list)
+        if result.should_block:
+            blocked_any = True
+    assert blocked_any, "a real consecutive-tool loop must eventually block"
+
+
+@pytest.mark.asyncio
+async def test_real_detection_populates_issue_text(temp_pisama_dir):
+    """When a real detection fires, issues carries human-readable text (from the
+    Evidence descriptions / summary), not a crash."""
+    guardian = Guardian(
+        config=GuardianConfig(enabled=True, mode="manual", pattern_window=20),
+        pisama_dir=temp_pisama_dir,
+    )
+    hook = {"tool_name": "Grep", "tool_input": {"pattern": "x"}, "session_id": "loop2"}
+    seen_issue_text = False
+    for _ in range(7):
+        result = await guardian.analyze(hook, session_id="loop2")
+        if result.issues:
+            seen_issue_text = all(isinstance(i, str) for i in result.issues)
+            if seen_issue_text:
+                break
+    assert seen_issue_text
