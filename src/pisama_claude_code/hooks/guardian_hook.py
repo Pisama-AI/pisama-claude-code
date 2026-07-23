@@ -3,9 +3,18 @@
 
 This hook runs BEFORE each tool call and can:
 1. Detect problematic patterns in real-time using pisama-core
-2. BLOCK tool calls by returning exit code 1
+2. BLOCK tool calls using the Claude Code PreToolUse blocking contract
 3. Write alerts for the guardian skill to handle
 4. Apply auto-fixes when configured
+
+Blocking contract (why not ``sys.exit(1)``):
+    Claude Code treats exit code **2** as the PreToolUse blocking signal
+    (stderr is fed back to Claude as the reason), or a stdout JSON
+    ``hookSpecificOutput.permissionDecision: "deny"`` on exit 0. Exit code 1
+    is a NON-blocking error — the tool proceeds. So a hook that "blocks" via
+    ``sys.exit(1)`` is a silent no-op. ``_emit_block`` below emits BOTH signals
+    (JSON deny on stdout + reason on stderr + exit 2) so the block is honored
+    across Claude Code versions.
 
 Usage:
     Install in ~/.claude/hooks/ and configure in settings.local.json
@@ -14,6 +23,34 @@ Usage:
 import json
 import os
 import sys
+
+# Claude Code PreToolUse blocking exit code. Exit 2 = block (stderr -> Claude);
+# exit 1 = non-blocking error (tool proceeds). See module docstring.
+BLOCK_EXIT_CODE = 2
+
+
+def _emit_block(reason: str) -> None:
+    """Signal a PreToolUse block that Claude Code actually honors.
+
+    Emits the structured deny decision on stdout (for versions that parse
+    ``hookSpecificOutput.permissionDecision``) AND the reason on stderr with
+    exit code 2 (the broadly-honored blocking signal). The two agree, so any
+    version blocks. Never returns — exits the process.
+    """
+    reason = (reason or "Blocked by PISAMA detection").strip()
+    decision = {
+        "hookSpecificOutput": {
+            "hookEventName": "PreToolUse",
+            "permissionDecision": "deny",
+            "permissionDecisionReason": reason,
+        }
+    }
+    try:
+        print(json.dumps(decision))
+    except Exception:
+        pass
+    print(f"PISAMA: {reason}", file=sys.stderr)
+    sys.exit(BLOCK_EXIT_CODE)
 
 
 def main():
@@ -41,7 +78,11 @@ def main():
 
         # Check if we should block
         if result.should_block:
-            sys.exit(1)
+            reason = result.message or (
+                f"severity {result.severity}/100: " + "; ".join(result.issues)
+                if result.issues else f"severity {result.severity}/100"
+            )
+            _emit_block(reason)
         else:
             sys.exit(0)
 
@@ -93,8 +134,9 @@ def _fallback_detection(hook_data: dict, session_id: str) -> None:
                     current_consecutive = 1
 
             if max_consecutive >= 5:
-                print(f"PISAMA: Loop detected ({current_tool} repeated {max_consecutive}x)", file=sys.stderr)
-                sys.exit(1)
+                _emit_block(
+                    f"Loop detected ({current_tool} repeated {max_consecutive}x)"
+                )
 
     except Exception:
         pass

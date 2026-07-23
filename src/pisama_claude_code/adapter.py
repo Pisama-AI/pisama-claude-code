@@ -4,7 +4,10 @@ Implements PlatformAdapter for Claude Code, handling trace capture,
 detection, and fix injection through Claude's hook and MCP systems.
 """
 
+import json
+import os
 import sys
+import tempfile
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -35,7 +38,8 @@ class ClaudeCodeAdapter(PlatformAdapter):
     Handles:
     - Converting hook data to universal Span format
     - Injecting fixes via stderr (visible to Claude)
-    - Blocking tool calls by returning exit code 1
+    - Blocking tool calls via the PreToolUse contract (exit code 2 / stdout
+      JSON ``permissionDecision: "deny"``); exit code 1 does NOT block
     - Writing MCP resources for skill access
     """
 
@@ -47,11 +51,19 @@ class ClaudeCodeAdapter(PlatformAdapter):
         self.pisama_dir = pisama_dir or (Path.home() / ".claude" / "pisama")
         self.traces_dir = self.pisama_dir / "traces"
         self.alert_path = Path("/tmp/pisama-alert.json")
+        # Durable block/terminate store. The guardian hook runs as a FRESH
+        # subprocess per tool call, so an in-memory set of blocked sessions is
+        # empty on the next call — a TERMINATE never persists and the run
+        # proceeds if detection doesn't re-fire. This on-disk store is what
+        # makes BLOCK/TERMINATE durable across tool calls.
+        self.blocked_store_path = self.pisama_dir / "blocked_sessions.json"
 
         self.converter = TraceConverter()
         self.storage = storage or TraceStorage(self.traces_dir)
 
-        self._blocked_sessions: set[str] = set()
+        # In-memory mirror of the persisted blocked set (kept for parity with
+        # get_state()); the persistent store is the source of truth.
+        self._blocked_sessions: set[str] = set(self._load_blocked_store().keys())
 
     @property
     def platform_name(self) -> Platform:
@@ -146,7 +158,7 @@ class ClaudeCodeAdapter(PlatformAdapter):
             )
 
             if session_id:
-                self._blocked_sessions.add(session_id)
+                self._record_block(session_id, "block", severity, issues, message)
 
             return InjectionResult(
                 success=True,
@@ -161,7 +173,7 @@ class ClaudeCodeAdapter(PlatformAdapter):
             print(message, file=sys.stderr)
 
             if session_id:
-                self._blocked_sessions.add(session_id)
+                self._record_block(session_id, "terminate", severity, issues, message)
 
             return InjectionResult(
                 success=True,
@@ -177,22 +189,27 @@ class ClaudeCodeAdapter(PlatformAdapter):
         )
 
     def can_block(self) -> bool:
-        """Claude Code hooks can block by returning exit code 1."""
+        """Claude Code PreToolUse hooks can block (exit code 2 / deny JSON)."""
         return True
 
     def block_action(self, reason: str) -> bool:
-        """Block current action by exiting with code 1.
+        """Signal that the current tool call should be blocked.
 
-        In Claude Code hooks, exiting with code 1 prevents the tool call.
+        In Claude Code PreToolUse hooks, a block is signalled by exit code 2
+        (stderr shown to Claude) or a stdout JSON
+        ``hookSpecificOutput.permissionDecision: "deny"``. Exit code 1 is a
+        NON-blocking error and does not prevent the tool. The guardian hook
+        emits the correct signal via ``guardian_hook._emit_block``; this method
+        records intent and returns True.
 
         Args:
-            reason: Reason for blocking (logged but not used in exit)
+            reason: Reason for blocking (surfaced to Claude by the hook)
 
         Returns:
-            True (always succeeds if we're in a hook context)
+            True (block intent recorded)
         """
-        # The actual exit happens after this returns
-        # Caller should call sys.exit(1) after this
+        # The actual block signal is emitted by the hook entrypoint via
+        # _emit_block(reason) -> stdout deny JSON + stderr reason + exit 2.
         return True
 
     def get_supported_injection_methods(self) -> list[InjectionMethod]:
@@ -228,18 +245,35 @@ class ClaudeCodeAdapter(PlatformAdapter):
         return self.storage.get_recent(limit)
 
     def is_session_blocked(self, session_id: str) -> bool:
-        """Check if a session is currently blocked.
+        """Check if a session is currently blocked (durable, cross-subprocess).
+
+        Reads the on-disk store so a fresh guardian subprocess sees a block or
+        terminate recorded by a prior tool call.
 
         Args:
             session_id: Session to check
 
         Returns:
-            True if session is blocked
+            True if session is blocked or terminated
         """
-        return session_id in self._blocked_sessions
+        return session_id in self._load_blocked_store()
+
+    def get_block_record(self, session_id: str) -> Optional[dict]:
+        """Return the durable block record for a session, or None.
+
+        The record carries ``level`` ("block" | "terminate"), ``severity``,
+        ``issues``, ``message`` and ``timestamp``. Used by the guardian to
+        re-block a session on a fresh tool call without re-running detection —
+        the mechanism that makes TERMINATE actually end the run.
+        """
+        return self._load_blocked_store().get(session_id)
 
     def unblock_session(self, session_id: str) -> bool:
-        """Unblock a session.
+        """Unblock a session (clears the durable record).
+
+        Called by the /pisama-intervene acknowledge flow once the user has
+        reviewed a BLOCK. A TERMINATE is terminal but can still be cleared here
+        when the user explicitly chooses to resume.
 
         Args:
             session_id: Session to unblock
@@ -247,10 +281,60 @@ class ClaudeCodeAdapter(PlatformAdapter):
         Returns:
             True if session was blocked and is now unblocked
         """
-        if session_id in self._blocked_sessions:
-            self._blocked_sessions.discard(session_id)
+        store = self._load_blocked_store()
+        self._blocked_sessions.discard(session_id)
+        if session_id in store:
+            del store[session_id]
+            self._save_blocked_store(store)
             return True
         return False
+
+    # -- durable block store --------------------------------------------------
+
+    def _record_block(
+        self,
+        session_id: str,
+        level: str,
+        severity: int,
+        issues: list[str],
+        message: str,
+    ) -> None:
+        """Persist a durable block/terminate record for a session."""
+        store = self._load_blocked_store()
+        store[session_id] = {
+            "level": level,
+            "severity": severity,
+            "issues": list(issues or []),
+            "message": message,
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+        }
+        self._save_blocked_store(store)
+        self._blocked_sessions.add(session_id)
+
+    def _load_blocked_store(self) -> dict[str, dict]:
+        """Load the durable block store; tolerate a missing/corrupt file."""
+        try:
+            with open(self.blocked_store_path) as f:
+                data = json.load(f)
+            return data if isinstance(data, dict) else {}
+        except (FileNotFoundError, json.JSONDecodeError, OSError):
+            return {}
+
+    def _save_blocked_store(self, store: dict[str, dict]) -> None:
+        """Atomically write the durable block store."""
+        self.pisama_dir.mkdir(parents=True, exist_ok=True)
+        fd, tmp = tempfile.mkstemp(
+            dir=str(self.pisama_dir), prefix=".blocked_sessions.", suffix=".tmp"
+        )
+        try:
+            with os.fdopen(fd, "w") as f:
+                json.dump(store, f, indent=2)
+            os.replace(tmp, self.blocked_store_path)
+        except OSError:
+            try:
+                os.unlink(tmp)
+            except OSError:
+                pass
 
     def _format_suggestion(self, severity: int, issues: list[str], directive: str) -> str:
         """Format a suggestion message."""

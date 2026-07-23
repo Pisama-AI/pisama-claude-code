@@ -144,6 +144,30 @@ class Guardian:
         # Get session ID
         session_id = session_id or hook_data.get("session_id") or os.environ.get("CLAUDE_SESSION_ID", "unknown")
 
+        # Durable enforcement short-circuit. The hook runs as a fresh subprocess
+        # per tool call, so a BLOCK/TERMINATE recorded on a previous call lives
+        # only on disk. Re-block here WITHOUT re-running detection — this is what
+        # makes TERMINATE actually end the run instead of resuming when detection
+        # happens not to re-fire. Cleared via adapter.unblock_session()
+        # (the /pisama-intervene acknowledge flow).
+        block_rec = self.adapter.get_block_record(session_id)
+        if block_rec is not None:
+            level = block_rec.get("level", "terminate")
+            self.audit.log("durable_block", {
+                "session_id": session_id,
+                "level": level,
+                "action": "reblocked",
+            })
+            return GuardianResult(
+                should_block=True,
+                severity=block_rec.get("severity", 100),
+                issues=block_rec.get("issues", []),
+                action_taken=f"{level}_persisted",
+                message=block_rec.get("message")
+                or "Session was blocked by a prior PISAMA enforcement. "
+                "Use /pisama-intervene to review before continuing.",
+            )
+
         # Convert to span
         span = self.adapter.capture_span(hook_data)
 
@@ -165,7 +189,7 @@ class Guardian:
 
         # Calculate severity
         if detection_results:
-            severity = self.scoring_engine.calculate(detection_results)
+            severity = self.scoring_engine.calculate_severity(detection_results)
             issues = []
             for result in detection_results:
                 if result.detected:
