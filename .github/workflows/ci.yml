@@ -35,8 +35,13 @@ jobs:
       - name: Run type checking
         run: mypy src/pisama_claude_code/
 
-      - name: Run tests
+      - name: Run tests with coverage
+        if: matrix.os == 'ubuntu-latest' && matrix.python-version == '3.11'
         run: pytest tests/ -v --cov=pisama_claude_code --cov-report=xml --cov-fail-under=55
+
+      - name: Run tests
+        if: matrix.os != 'ubuntu-latest' || matrix.python-version != '3.11'
+        run: pytest tests/ -v
 
       - name: Upload coverage
         uses: codecov/codecov-action@e53489f4d376d79066609109e7a95a29eb3740b1 # v7.0.0
