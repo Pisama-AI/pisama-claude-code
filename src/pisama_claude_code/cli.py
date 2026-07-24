@@ -41,10 +41,11 @@ import sys
 import time
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 
 import click
 
+httpx: Any
 try:
     import httpx
 except ImportError:
@@ -560,7 +561,7 @@ def _run_local_detection(traces: list) -> list:
 
     # Check for semantic loops (same tool, different params but same pattern)
     tool_sequence = [t.get("tool_name", "") for t in traces]
-    tool_counts = {}
+    tool_counts: dict[str, int] = {}
     for tool in tool_sequence:
         tool_counts[tool] = tool_counts.get(tool, 0) + 1
 
@@ -1461,7 +1462,8 @@ def normalize_trace(t: dict) -> dict:
     session_id = t.get("session_id") or t.get("trace_id", "")[:8]
 
     # Original hook payload, preserved verbatim by the capture hook.
-    raw_hook = t.get("raw") if isinstance(t.get("raw"), dict) else {}
+    raw_value = t.get("raw")
+    raw_hook: dict[str, Any] = raw_value if isinstance(raw_value, dict) else {}
 
     # Extract usage data (new fields)
     usage = t.get("usage", {})
@@ -1503,12 +1505,12 @@ def normalize_trace(t: dict) -> dict:
     }
 
 
-def load_recent_traces(n: int) -> list:
+def load_recent_traces(n: int) -> list[dict[str, Any]]:
     """Load recent traces from local storage."""
     if n <= 0:
         return []
 
-    traces = []
+    traces: list[dict[str, Any]] = []
     if not TRACES_DIR.exists():
         return traces
 

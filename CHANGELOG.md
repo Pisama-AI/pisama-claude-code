@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- Make type checking blocking and fix all reported source errors.
+- Add Python 3.13 and a non-regression coverage floor to CI.
+- Tighten the optional `pisama-core` compatibility range.
+- Add CodeQL and pull request dependency review.
+
 ## [0.6.4] - 2026-07-23
 
 ### Changed

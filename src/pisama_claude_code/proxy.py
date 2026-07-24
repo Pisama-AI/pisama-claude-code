@@ -32,6 +32,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+aiohttp: Any
+web: Any
 try:
     import aiohttp
     from aiohttp import web

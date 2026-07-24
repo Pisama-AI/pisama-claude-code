@@ -8,7 +8,7 @@ import json
 import os
 import sys
 import tempfile
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Optional
@@ -30,8 +30,8 @@ class GuardianConfig:
     enabled: bool = True
     mode: str = "manual"  # manual, auto, report
     severity_threshold: int = 40
-    auto_fix_types: list[str] = None
-    blocked_fixes: list[str] = None
+    auto_fix_types: Optional[list[str]] = None
+    blocked_fixes: Optional[list[str]] = None
     max_auto_fixes: int = 10
     cooldown_seconds: int = 30
     pattern_window: int = 10
@@ -65,15 +65,10 @@ class GuardianResult:
 
     should_block: bool = False
     severity: int = 0
-    issues: list[str] = None
+    issues: list[str] = field(default_factory=list)
     recommendation: Optional[str] = None
     action_taken: str = "allowed"
     message: Optional[str] = None
-
-    def __post_init__(self):
-        if self.issues is None:
-            self.issues = []
-
 
 class Guardian:
     """PISAMA Guardian for Claude Code.
@@ -250,7 +245,7 @@ class Guardian:
     ) -> GuardianResult:
         """Handle auto mode - apply fixes automatically."""
         # Check if fix type is approved
-        if recommendation not in self.config.auto_fix_types:
+        if recommendation not in (self.config.auto_fix_types or []):
             # Escalate to manual
             return self._escalate_to_manual(severity, issues, recommendation, session_id)
 
