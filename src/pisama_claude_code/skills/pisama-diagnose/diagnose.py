@@ -42,6 +42,7 @@ Usage:
       --n8n-url https://n8n.example.com --n8n-key KEY   # apply to n8n
   python3 diagnose.py --detection-id <uuid>            # diagnose a stored detection
 """
+
 from __future__ import annotations
 
 import argparse
@@ -64,6 +65,7 @@ REAL_APPLY_FRAMEWORKS = ("n8n",)
 # Config + HTTP (stdlib only)
 # ---------------------------------------------------------------------------
 
+
 def load_config() -> Dict[str, Any]:
     """Read api_url / api_key / tenant_id from the pisama-cc config or env."""
     cfg: Dict[str, Any] = {}
@@ -80,8 +82,9 @@ def load_config() -> Dict[str, Any]:
     return cfg
 
 
-def _request(method: str, url: str, body: Optional[dict], token: Optional[str],
-             timeout: float) -> dict:
+def _request(
+    method: str, url: str, body: Optional[dict], token: Optional[str], timeout: float
+) -> dict:
     data = json.dumps(body).encode() if body is not None else None
     headers = {"Content-Type": "application/json"}
     if token:
@@ -109,6 +112,7 @@ def get(url: str, token: Optional[str] = None, timeout: float = 60) -> dict:
 # Trace loading
 # ---------------------------------------------------------------------------
 
+
 def load_trajectory(src: str) -> dict:
     """Load an ATIF trajectory from a file path or '-' (stdin).
 
@@ -131,9 +135,16 @@ def load_trajectory(src: str) -> dict:
 # Backend calls
 # ---------------------------------------------------------------------------
 
-def analyze_trajectory(trajectory: dict, api_url: str, *, apply_fix: bool = False,
-                       framework: Optional[str] = None, entity_id: Optional[str] = None,
-                       credentials: Optional[dict] = None) -> dict:
+
+def analyze_trajectory(
+    trajectory: dict,
+    api_url: str,
+    *,
+    apply_fix: bool = False,
+    framework: Optional[str] = None,
+    entity_id: Optional[str] = None,
+    credentials: Optional[dict] = None,
+) -> dict:
     body: Dict[str, Any] = {"trajectory": trajectory, "apply_fix": apply_fix}
     if framework:
         body["framework"] = framework
@@ -188,6 +199,7 @@ def fetch_ide_patch(primary: Dict[str, Any], api_url: str, token: str) -> Option
 # Rendering helpers
 # ---------------------------------------------------------------------------
 
+
 def _conf_pct(value: Any) -> str:
     try:
         f = float(value)
@@ -212,9 +224,12 @@ def _localized(det: Dict[str, Any]) -> str:
     return "not localized to a single span"
 
 
-def render_report(diagnosis: Dict[str, Any], trace: Dict[str, Any],
-                  healing: Optional[Dict[str, Any]] = None,
-                  ide_patch: Optional[Dict[str, Any]] = None) -> str:
+def render_report(
+    diagnosis: Dict[str, Any],
+    trace: Dict[str, Any],
+    healing: Optional[Dict[str, Any]] = None,
+    ide_patch: Optional[Dict[str, Any]] = None,
+) -> str:
     d = diagnosis
     detections: List[Dict[str, Any]] = d.get("all_detections") or []
     primary = d.get("primary_failure")
@@ -239,8 +254,9 @@ def render_report(diagnosis: Dict[str, Any], trace: Dict[str, Any],
     if d.get("has_failures") and primary:
         out.append(f"**Verdict: {failure_count} failure(s) detected.**")
     elif d.get("abstained"):
-        out.append("**Verdict: abstained.** The detectors were not confident enough "
-                   "to call this trace.")
+        out.append(
+            "**Verdict: abstained.** The detectors were not confident enough to call this trace."
+        )
     else:
         out.append("**Verdict: no failures detected.**")
     run = len(d.get("detectors_run") or [])
@@ -254,18 +270,28 @@ def render_report(diagnosis: Dict[str, Any], trace: Dict[str, Any],
 
     # Primary failure
     if primary:
-        out += ["## Primary failure", "",
-                f"**{primary.get('title', primary.get('category', 'Failure'))}**", ""]
-        out += [f"- {b}" for b in [
-            f"Type: `{primary.get('category', 'unknown')}`",
-            f"Severity: {primary.get('severity', 'unknown')}",
-            f"Confidence: {_conf_pct(primary.get('confidence'))}"
-            + (f" ({primary['confidence_tier']})" if primary.get("confidence_tier") else ""),
-            f"Where it went wrong: {_localized(primary)}",
-        ]]
-        out += ["",
-                "> Step and agent localization is best-effort and is often unset. "
-                "Confirm against the evidence below before acting.", ""]
+        out += [
+            "## Primary failure",
+            "",
+            f"**{primary.get('title', primary.get('category', 'Failure'))}**",
+            "",
+        ]
+        out += [
+            f"- {b}"
+            for b in [
+                f"Type: `{primary.get('category', 'unknown')}`",
+                f"Severity: {primary.get('severity', 'unknown')}",
+                f"Confidence: {_conf_pct(primary.get('confidence'))}"
+                + (f" ({primary['confidence_tier']})" if primary.get("confidence_tier") else ""),
+                f"Where it went wrong: {_localized(primary)}",
+            ]
+        ]
+        out += [
+            "",
+            "> Step and agent localization is best-effort and is often unset. "
+            "Confirm against the evidence below before acting.",
+            "",
+        ]
         evidence = primary.get("evidence") or []
         if evidence:
             ev_json = json.dumps(evidence[:4], indent=2)[:1800]
@@ -273,9 +299,12 @@ def render_report(diagnosis: Dict[str, Any], trace: Dict[str, Any],
 
     # All detections table
     if detections:
-        out += [f"## All detections ({len(detections)})", "",
-                "| Detector | Confidence | Severity | Where | Title |",
-                "|---|---|---|---|---|"]
+        out += [
+            f"## All detections ({len(detections)})",
+            "",
+            "| Detector | Confidence | Severity | Where | Title |",
+            "|---|---|---|---|---|",
+        ]
         for det in detections:
             out.append(
                 f"| `{det.get('category', '?')}` "
@@ -307,13 +336,18 @@ def render_report(diagnosis: Dict[str, Any], trace: Dict[str, Any],
         out.append("")
 
     # Honest caveats
-    out += ["## Notes", "",
-            "- Detector confidences are calibrated on an external trace corpus. "
-            "Per-detector F1 and coverage are published at docs.pisama.ai.",
-            "- Live auto-apply lands on n8n workflows, the framework with verified "
-            "real-trace apply. Other frameworks return the fix as a suggestion you "
-            "apply by hand.",
-            "", "_Generated by the pisama-diagnose skill._", ""]
+    out += [
+        "## Notes",
+        "",
+        "- Detector confidences are calibrated on an external trace corpus. "
+        "Per-detector F1 and coverage are published at docs.pisama.ai.",
+        "- Live auto-apply lands on n8n workflows, the framework with verified "
+        "real-trace apply. Other frameworks return the fix as a suggestion you "
+        "apply by hand.",
+        "",
+        "_Generated by the pisama-diagnose skill._",
+        "",
+    ]
     return "\n".join(out)
 
 
@@ -328,13 +362,17 @@ def _render_fix_guidance(d: Dict[str, Any], primary: Optional[Dict[str, Any]]) -
         out.append(suggested)
         out.append("")
     if d.get("self_healing_available"):
-        out.append("Pisama may be able to auto-apply this fix for n8n workflows. "
-                   "Re-run with `--apply --entity-id <workflow_id>` plus your n8n credentials. "
-                   "The apply step reports whether a fix generator matched this failure type.")
+        out.append(
+            "Pisama may be able to auto-apply this fix for n8n workflows. "
+            "Re-run with `--apply --entity-id <workflow_id>` plus your n8n credentials. "
+            "The apply step reports whether a fix generator matched this failure type."
+        )
         out.append("")
     elif primary:
-        out.append("No automated self-healing fix is registered for this failure type. "
-                   "Use the suggestion above as a manual starting point.")
+        out.append(
+            "No automated self-healing fix is registered for this failure type. "
+            "Use the suggestion above as a manual starting point."
+        )
         out.append("")
     return out
 
@@ -354,16 +392,23 @@ def _render_ide_patch(patch: Optional[Dict[str, Any]]) -> List[str]:
     if not instructions and not verification:
         return []
     targets = patch.get("target_files") or ["CLAUDE.md", ".cursorrules"]
-    out = ["## Apply this fix", "",
-           "Drop this guardrail into your `" + "` or `".join(targets) + "` so your "
-           "coding agent applies it on the next run:", ""]
+    out = [
+        "## Apply this fix",
+        "",
+        "Drop this guardrail into your `" + "` or `".join(targets) + "` so your "
+        "coding agent applies it on the next run:",
+        "",
+    ]
     if instructions:
         out += ["````markdown", instructions, "````", ""]
     if verification:
         out += ["### Verify the fix", "", "```sh", verification, "```", ""]
     if patch.get("apply_mode") == "connector":
-        out += ["_Pisama can also apply this directly to your n8n workflow; "
-                "re-run with `--apply --entity-id <workflow_id>`._", ""]
+        out += [
+            "_Pisama can also apply this directly to your n8n workflow; "
+            "re-run with `--apply --entity-id <workflow_id>`._",
+            "",
+        ]
     return out
 
 
@@ -384,11 +429,17 @@ def _render_apply(healing: Dict[str, Any]) -> List[str]:
 
 def render_from_detection(det: Dict[str, Any]) -> str:
     """Render a report from a stored DetectionResponse (the --detection-id path)."""
-    out = ["# Pisama diagnosis", "",
-           f"detection `{det.get('id', 'unknown')}`, trace `{det.get('trace_id', 'unknown')}`", "",
-           f"**Verdict: {det.get('detection_type', 'failure')} detected** "
-           f"(confidence {det.get('confidence', '?')}%"
-           + (f", {det['confidence_tier']}" if det.get("confidence_tier") else "") + ").", ""]
+    out = [
+        "# Pisama diagnosis",
+        "",
+        f"detection `{det.get('id', 'unknown')}`, trace `{det.get('trace_id', 'unknown')}`",
+        "",
+        f"**Verdict: {det.get('detection_type', 'failure')} detected** "
+        f"(confidence {det.get('confidence', '?')}%"
+        + (f", {det['confidence_tier']}" if det.get("confidence_tier") else "")
+        + ").",
+        "",
+    ]
     if det.get("explanation"):
         out += ["## Root cause", "", str(det["explanation"]).strip(), ""]
     details = det.get("details") or {}
@@ -407,6 +458,7 @@ def render_from_detection(det: Dict[str, Any]) -> str:
 # CLI
 # ---------------------------------------------------------------------------
 
+
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
         prog="pisama-diagnose",
@@ -414,14 +466,20 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p.add_argument("trace", nargs="?", help="Path to an ATIF trajectory JSON, or '-' for stdin.")
     p.add_argument("--detection-id", help="Diagnose a stored Pisama detection by id (needs a key).")
-    p.add_argument("--apply", action="store_true",
-                   help="Apply the primary fix to a live n8n entity (needs --entity-id + creds).")
+    p.add_argument(
+        "--apply",
+        action="store_true",
+        help="Apply the primary fix to a live n8n entity (needs --entity-id + creds).",
+    )
     p.add_argument("--framework", default="n8n", help="Framework for --apply (default: n8n).")
     p.add_argument("--entity-id", help="Framework entity id for --apply (e.g. an n8n workflow id).")
     p.add_argument("--n8n-url", help="n8n instance URL for --apply (or env PISAMA_N8N_URL).")
     p.add_argument("--n8n-key", help="n8n API key for --apply (or env PISAMA_N8N_KEY).")
-    p.add_argument("--no-patch", action="store_true",
-                   help="Skip the apply-ready CLAUDE.md/.cursorrules patch lookup (needs a key).")
+    p.add_argument(
+        "--no-patch",
+        action="store_true",
+        help="Skip the apply-ready CLAUDE.md/.cursorrules patch lookup (needs a key).",
+    )
     p.add_argument("--out", help="Write the report to this path (default: print to stdout).")
     p.add_argument("--api-url", help=f"Pisama API base URL (default: {DEFAULT_API_URL} or config).")
     p.add_argument("--json", action="store_true", help="Also print the raw API response to stderr.")
@@ -442,8 +500,9 @@ def main(argv: Optional[List[str]] = None) -> int:
     # Path A: stored detection by id.
     if args.detection_id:
         if not (token and tenant_id):
-            raise SystemExit("--detection-id needs a connected key. "
-                             "Run: pisama-cc connect --api-key <key>")
+            raise SystemExit(
+                "--detection-id needs a connected key. Run: pisama-cc connect --api-key <key>"
+            )
         det = fetch_detection(args.detection_id, api_url, tenant_id, token)
         _emit(render_from_detection(det), args.out)
         return 0
@@ -455,8 +514,11 @@ def main(argv: Optional[List[str]] = None) -> int:
     if args.apply:
         if args.framework not in REAL_APPLY_FRAMEWORKS:
             verified = ", ".join(REAL_APPLY_FRAMEWORKS)
-            print(f"Note: real-trace auto-apply is verified for {verified} only. "
-                  f"'{args.framework}' will be attempted but may not apply.", file=sys.stderr)
+            print(
+                f"Note: real-trace auto-apply is verified for {verified} only. "
+                f"'{args.framework}' will be attempted but may not apply.",
+                file=sys.stderr,
+            )
         if not args.entity_id:
             raise SystemExit("--apply needs --entity-id (the framework entity to patch).")
         n8n_url = args.n8n_url or os.getenv("PISAMA_N8N_URL")
@@ -466,8 +528,9 @@ def main(argv: Optional[List[str]] = None) -> int:
             creds["instance_url"] = n8n_url
         if n8n_key:
             creds["api_key"] = n8n_key
-        apply_kwargs = dict(apply_fix=True, framework=args.framework,
-                            entity_id=args.entity_id, credentials=creds)
+        apply_kwargs = dict(
+            apply_fix=True, framework=args.framework, entity_id=args.entity_id, credentials=creds
+        )
 
     result = analyze_trajectory(trajectory, api_url, **apply_kwargs)
     if args.json:
@@ -482,8 +545,9 @@ def main(argv: Optional[List[str]] = None) -> int:
     if primary and token and not args.no_patch:
         ide_patch = fetch_ide_patch(primary, api_url, token)
 
-    report = render_report(diagnosis, result.get("trace", {}),
-                           healing=result.get("healing"), ide_patch=ide_patch)
+    report = render_report(
+        diagnosis, result.get("trace", {}), healing=result.get("healing"), ide_patch=ide_patch
+    )
     _emit(report, args.out)
     return 0
 

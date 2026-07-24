@@ -12,6 +12,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+from pisama_claude_code.private_files import ensure_private_dir, make_private
+
 
 @dataclass
 class LiteDetectionRecord:
@@ -55,8 +57,9 @@ class LiteStorage:
 
     def __init__(self, db_path: Path):
         self.db_path = db_path
-        db_path.parent.mkdir(parents=True, exist_ok=True)
+        ensure_private_dir(db_path.parent)
         self._init_schema()
+        make_private(db_path)
 
     def _get_conn(self) -> sqlite3.Connection:
         """Get a new connection with row_factory set."""
@@ -105,21 +108,13 @@ class LiteStorage:
         """)
 
         # Indexes for common queries
-        conn.execute(
-            "CREATE INDEX IF NOT EXISTS idx_det_session ON lite_detections(session_id)"
-        )
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_det_session ON lite_detections(session_id)")
         conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_det_detector ON lite_detections(detector_name)"
         )
-        conn.execute(
-            "CREATE INDEX IF NOT EXISTS idx_det_created ON lite_detections(created_at)"
-        )
-        conn.execute(
-            "CREATE INDEX IF NOT EXISTS idx_score_session ON lite_scores(session_id)"
-        )
-        conn.execute(
-            "CREATE INDEX IF NOT EXISTS idx_score_created ON lite_scores(created_at)"
-        )
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_det_created ON lite_detections(created_at)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_score_session ON lite_scores(session_id)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_score_created ON lite_scores(created_at)")
         conn.commit()
         conn.close()
 
@@ -414,19 +409,21 @@ class LiteStorage:
 
             records = []
             for row in rows:
-                records.append({
-                    "id": row["id"],
-                    "trace_id": row["trace_id"],
-                    "session_id": row["session_id"],
-                    "detector_name": row["detector_name"],
-                    "detected": True,
-                    "severity": row["severity"],
-                    "confidence": row["confidence"],
-                    "method": row["method"],
-                    "details": json.loads(row["details"]),
-                    "evidence": json.loads(row["evidence"]),
-                    "created_at": row["created_at"],
-                })
+                records.append(
+                    {
+                        "id": row["id"],
+                        "trace_id": row["trace_id"],
+                        "session_id": row["session_id"],
+                        "detector_name": row["detector_name"],
+                        "detected": True,
+                        "severity": row["severity"],
+                        "confidence": row["confidence"],
+                        "method": row["method"],
+                        "details": json.loads(row["details"]),
+                        "evidence": json.loads(row["evidence"]),
+                        "created_at": row["created_at"],
+                    }
+                )
 
             # Include scores
             score_rows = conn.execute("""
@@ -436,16 +433,18 @@ class LiteStorage:
 
             scores = []
             for row in score_rows:
-                scores.append({
-                    "id": row["id"],
-                    "trace_id": row["trace_id"],
-                    "session_id": row["session_id"],
-                    "score_type": row["score_type"],
-                    "overall_score": row["overall_score"],
-                    "dimension_scores": json.loads(row["dimension_scores"]),
-                    "summary": row["summary"],
-                    "created_at": row["created_at"],
-                })
+                scores.append(
+                    {
+                        "id": row["id"],
+                        "trace_id": row["trace_id"],
+                        "session_id": row["session_id"],
+                        "score_type": row["score_type"],
+                        "overall_score": row["overall_score"],
+                        "dimension_scores": json.loads(row["dimension_scores"]),
+                        "summary": row["summary"],
+                        "created_at": row["created_at"],
+                    }
+                )
 
             export_data = {
                 "format": "pisama-lite-export",

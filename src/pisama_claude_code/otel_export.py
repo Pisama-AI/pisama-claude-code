@@ -9,7 +9,11 @@ from __future__ import annotations
 import json
 import time
 from datetime import datetime
+from pathlib import Path
 from typing import Any, Dict, List, Optional
+
+from pisama_claude_code import __version__
+from pisama_claude_code.private_files import make_private
 
 # Lazy imports for OTEL
 _otel_available = None
@@ -21,6 +25,7 @@ def is_otel_available() -> bool:
     if _otel_available is None:
         try:
             import opentelemetry  # noqa: F401
+
             _otel_available = True
         except ImportError:
             _otel_available = False
@@ -45,11 +50,8 @@ def export_traces_to_otel(
         Dict with export status and statistics
     """
     if not is_otel_available():
-        raise ImportError(
-            "OpenTelemetry not installed. Run: pip install pisama-claude-code[otel]"
-        )
+        raise ImportError("OpenTelemetry not installed. Run: pip install pisama-claude-code[otel]")
 
-    from opentelemetry import trace as otel_trace
     from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
     from opentelemetry.sdk.resources import Resource
     from opentelemetry.sdk.trace import TracerProvider
@@ -57,11 +59,13 @@ def export_traces_to_otel(
     from opentelemetry.trace import SpanKind
 
     # Set up resource
-    resource = Resource.create({
-        "service.name": service_name,
-        "service.version": "0.3.7",
-        "telemetry.sdk.name": "pisama-claude-code",
-    })
+    resource = Resource.create(
+        {
+            "service.name": service_name,
+            "service.version": __version__,
+            "telemetry.sdk.name": "pisama-claude-code",
+        }
+    )
 
     # Create provider and exporter
     provider = TracerProvider(resource=resource)
@@ -70,9 +74,10 @@ def export_traces_to_otel(
         headers=headers or {},
     )
     provider.add_span_processor(BatchSpanProcessor(exporter))
-    otel_trace.set_tracer_provider(provider)
-
-    tracer = otel_trace.get_tracer("pisama-claude-code")
+    # Keep export isolated from the host application's global tracer provider.
+    # OpenTelemetry only permits setting that global once; mutating it here made
+    # a second export in the same process use the first call's endpoint.
+    tracer = provider.get_tracer("pisama-claude-code", __version__)
 
     # Group traces by session
     sessions: Dict[str, List[Dict]] = {}
@@ -92,7 +97,9 @@ def export_traces_to_otel(
         # Create parent span for session
         session_start = _parse_timestamp(session_traces[0].get("timestamp"))
 
-        with tracer.start_span(
+        # Make the session current while creating tool spans so the OTLP batch
+        # preserves a real parent-child tree instead of exporting unrelated roots.
+        with tracer.start_as_current_span(
             name=f"claude-code-session:{session_id}",
             kind=SpanKind.INTERNAL,
             start_time=session_start,
@@ -117,7 +124,7 @@ def export_traces_to_otel(
                 tool_name = t.get("tool_name", "unknown")
                 hook_type = t.get("hook_type", "")
 
-                with tracer.start_span(
+                with tracer.start_as_current_span(
                     name=f"{tool_name}:{hook_type}",
                     kind=SpanKind.INTERNAL,
                     start_time=span_start,
@@ -198,8 +205,14 @@ def convert_trace_to_otel_dict(trace: Dict[str, Any]) -> Dict[str, Any]:
         {"key": "session.id", "value": {"stringValue": str(trace.get("session_id", ""))}},
         {"key": "gen_ai.system", "value": {"stringValue": "anthropic"}},
         {"key": "gen_ai.request.model", "value": {"stringValue": str(trace.get("model") or "")}},
-        {"key": "gen_ai.usage.input_tokens", "value": {"intValue": int(trace.get("input_tokens") or 0)}},
-        {"key": "gen_ai.usage.output_tokens", "value": {"intValue": int(trace.get("output_tokens") or 0)}},
+        {
+            "key": "gen_ai.usage.input_tokens",
+            "value": {"intValue": int(trace.get("input_tokens") or 0)},
+        },
+        {
+            "key": "gen_ai.usage.output_tokens",
+            "value": {"intValue": int(trace.get("output_tokens") or 0)},
+        },
     ]
     if trace.get("cost_usd"):
         attributes.append(
@@ -211,19 +224,38 @@ def convert_trace_to_otel_dict(trace: Dict[str, Any]) -> Dict[str, Any]:
     # backend OTLP parser reads gen_ai.agent.id/name as the agent identity
     # fallback, which keeps parallel subagents apart.
     if trace.get("agent_id"):
-        attributes.append({"key": "gen_ai.agent.id", "value": {"stringValue": str(trace["agent_id"])}})
+        attributes.append(
+            {"key": "gen_ai.agent.id", "value": {"stringValue": str(trace["agent_id"])}}
+        )
         if trace.get("agent_type"):
-            attributes.append({"key": "gen_ai.agent.name", "value": {"stringValue": str(trace["agent_type"])}})
+            attributes.append(
+                {"key": "gen_ai.agent.name", "value": {"stringValue": str(trace["agent_type"])}}
+            )
     if trace.get("user_input"):
-        attributes.append({"key": "gen_ai.prompt", "value": {"stringValue": str(trace["user_input"])}})
+        attributes.append(
+            {"key": "gen_ai.prompt", "value": {"stringValue": str(trace["user_input"])}}
+        )
     if trace.get("ai_output"):
-        attributes.append({"key": "gen_ai.completion", "value": {"stringValue": str(trace["ai_output"])}})
+        attributes.append(
+            {"key": "gen_ai.completion", "value": {"stringValue": str(trace["ai_output"])}}
+        )
 
     # Full content -> gen_ai.state (lossless channel; preserves reasoning).
     state: Dict[str, Any] = {}
-    for key in ("user_input", "reasoning", "ai_output", "tool_input", "tool_output",
-                "model", "cost_usd", "cache_read_tokens", "working_dir",
-                "agent_id", "agent_type", "is_sidechain"):
+    for key in (
+        "user_input",
+        "reasoning",
+        "ai_output",
+        "tool_input",
+        "tool_output",
+        "model",
+        "cost_usd",
+        "cache_read_tokens",
+        "working_dir",
+        "agent_id",
+        "agent_type",
+        "is_sidechain",
+    ):
         val = trace.get(key)
         if val not in (None, "", {}, []):
             state[key] = val
@@ -232,10 +264,12 @@ def convert_trace_to_otel_dict(trace: Dict[str, Any]) -> Dict[str, Any]:
         state["tool_calls"] = tool_calls
     if state:
         try:
-            attributes.append({
-                "key": "gen_ai.state",
-                "value": {"stringValue": json.dumps(state, ensure_ascii=False, default=str)},
-            })
+            attributes.append(
+                {
+                    "key": "gen_ai.state",
+                    "value": {"stringValue": json.dumps(state, ensure_ascii=False, default=str)},
+                }
+            )
         except (TypeError, ValueError):
             pass
 
@@ -275,25 +309,29 @@ def export_to_otel_file(
     for session_id, session_traces in sessions.items():
         spans = [convert_trace_to_otel_dict(t) for t in session_traces]
 
-        resource_spans.append({
-            "resource": {
-                "attributes": [
-                    {"key": "service.name", "value": {"stringValue": service_name}},
-                    {"key": "session.id", "value": {"stringValue": session_id}},
-                ]
-            },
-            "scopeSpans": [
-                {
-                    "scope": {"name": "pisama-claude-code"},
-                    "spans": spans,
-                }
-            ]
-        })
+        resource_spans.append(
+            {
+                "resource": {
+                    "attributes": [
+                        {"key": "service.name", "value": {"stringValue": service_name}},
+                        {"key": "service.version", "value": {"stringValue": __version__}},
+                        {"key": "session.id", "value": {"stringValue": session_id}},
+                    ]
+                },
+                "scopeSpans": [
+                    {
+                        "scope": {"name": "pisama-claude-code"},
+                        "spans": spans,
+                    }
+                ],
+            }
+        )
 
     otel_payload = {"resourceSpans": resource_spans}
 
     with open(output_path, "w") as f:
         json.dump(otel_payload, f, indent=2)
+    make_private(Path(output_path))
 
     return {
         "success": True,
@@ -319,13 +357,14 @@ def _truncate(text: str, max_len: int) -> str:
     if not text:
         return ""
     if len(text) > max_len:
-        return text[:max_len - 3] + "..."
+        return text[: max_len - 3] + "..."
     return text
 
 
 def _generate_trace_id(session_id: str) -> str:
     """Generate a 32-char hex trace ID from session ID."""
     import hashlib
+
     h = hashlib.sha256(session_id.encode()).hexdigest()
     return h[:32]
 
@@ -333,5 +372,6 @@ def _generate_trace_id(session_id: str) -> str:
 def _generate_span_id(identifier: str) -> str:
     """Generate a 16-char hex span ID."""
     import hashlib
+
     h = hashlib.sha256(identifier.encode()).hexdigest()
     return h[:16]

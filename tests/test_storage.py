@@ -1,11 +1,9 @@
 """Tests for pisama_claude_code.storage module."""
 
-import pytest
 import json
-from datetime import datetime, timezone
-from pathlib import Path
 
-from pisama_core.traces import Span, SpanKind, SpanStatus, Platform
+from pisama_core.traces import Platform, Span, SpanKind
+
 from pisama_claude_code.storage import TraceStorage
 
 

@@ -1,13 +1,8 @@
 """Tests for pisama_claude_code.adapter module."""
 
-import pytest
-import json
-from pathlib import Path
-from io import StringIO
-import sys
-
-from pisama_core.traces import Platform, SpanKind
 from pisama_core.injection import EnforcementLevel
+from pisama_core.traces import Platform, SpanKind
+
 from pisama_claude_code.adapter import ClaudeCodeAdapter, ClaudeCodeContext
 
 

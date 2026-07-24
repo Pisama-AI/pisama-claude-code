@@ -70,6 +70,7 @@ class GuardianResult:
     action_taken: str = "allowed"
     message: Optional[str] = None
 
+
 class Guardian:
     """PISAMA Guardian for Claude Code.
 
@@ -136,7 +137,11 @@ class Guardian:
             return GuardianResult(action_taken="disabled")
 
         # Get session ID
-        session_id = session_id or hook_data.get("session_id") or os.environ.get("CLAUDE_SESSION_ID", "unknown")
+        session_id = (
+            session_id
+            or hook_data.get("session_id")
+            or os.environ.get("CLAUDE_SESSION_ID", "unknown")
+        )
 
         # Convert to span
         span = self.adapter.capture_span(hook_data)
@@ -172,12 +177,15 @@ class Guardian:
         if severity < self.config.severity_threshold:
             # Below threshold - log warning if close
             if severity >= self.config.severity_threshold - 10 and issues:
-                self.audit.log("warning", {
-                    "severity": severity,
-                    "issues": issues,
-                    "action": "allowed",
-                    "session_id": session_id,
-                })
+                self.audit.log(
+                    "warning",
+                    {
+                        "severity": severity,
+                        "issues": issues,
+                        "action": "allowed",
+                        "session_id": session_id,
+                    },
+                )
             return GuardianResult(
                 severity=severity,
                 issues=issues,
@@ -190,7 +198,9 @@ class Guardian:
         if self.config.mode == "report":
             return self._handle_report_mode(severity, issues, recommendation, session_id)
         elif self.config.mode == "auto":
-            return await self._handle_auto_mode(severity, issues, recommendation, session_id, trace, detection_results)
+            return await self._handle_auto_mode(
+                severity, issues, recommendation, session_id, trace, detection_results
+            )
         else:  # manual
             return self._handle_manual_mode(severity, issues, recommendation, session_id)
 
@@ -216,16 +226,22 @@ class Guardian:
         session_id: str,
     ) -> GuardianResult:
         """Handle report mode - log but don't block."""
-        self.audit.log("report", {
-            "severity": severity,
-            "issues": issues,
-            "recommendation": recommendation,
-            "action": "logged_only",
-            "session_id": session_id,
-        })
+        self.audit.log(
+            "report",
+            {
+                "severity": severity,
+                "issues": issues,
+                "recommendation": recommendation,
+                "action": "logged_only",
+                "session_id": session_id,
+            },
+        )
 
         # Print warning to stderr
-        print(f"PISAMA: Detected issue (severity {severity}) - {issues[0] if issues else 'unknown'}", file=sys.stderr)
+        print(
+            f"PISAMA: Detected issue (severity {severity}) - {issues[0] if issues else 'unknown'}",
+            file=sys.stderr,
+        )
 
         return GuardianResult(
             severity=severity,
@@ -254,8 +270,7 @@ class Guardian:
         if fix_count >= self.config.max_auto_fixes:
             # Too many fixes - escalate
             return self._escalate_to_manual(
-                severity, issues, recommendation, session_id,
-                reason="max_auto_fixes_reached"
+                severity, issues, recommendation, session_id, reason="max_auto_fixes_reached"
             )
 
         # Apply fix using healing engine
@@ -282,13 +297,16 @@ class Guardian:
         )
 
         # Log
-        self.audit.log("auto_heal", {
-            "severity": severity,
-            "issues": issues,
-            "fix_applied": recommendation,
-            "action": "auto_fixed",
-            "session_id": session_id,
-        })
+        self.audit.log(
+            "auto_heal",
+            {
+                "severity": severity,
+                "issues": issues,
+                "fix_applied": recommendation,
+                "action": "auto_fixed",
+                "session_id": session_id,
+            },
+        )
 
         # Track fix count
         self._fix_counts[session_id] = fix_count + 1
@@ -332,13 +350,16 @@ class Guardian:
         )
 
         # Log
-        self.audit.log("intervention", {
-            "severity": severity,
-            "issues": issues,
-            "recommendation": recommendation,
-            "action": "blocked_for_approval" if severity >= 60 else "warning",
-            "session_id": session_id,
-        })
+        self.audit.log(
+            "intervention",
+            {
+                "severity": severity,
+                "issues": issues,
+                "recommendation": recommendation,
+                "action": "blocked_for_approval" if severity >= 60 else "warning",
+                "session_id": session_id,
+            },
+        )
 
         # Block critical issues
         should_block = severity >= 60
@@ -363,14 +384,17 @@ class Guardian:
         """Escalate from auto to manual mode."""
         self._write_alert(session_id, severity, issues, recommendation)
 
-        self.audit.log("escalate", {
-            "severity": severity,
-            "issues": issues,
-            "recommendation": recommendation,
-            "reason": reason,
-            "action": "escalated_to_manual",
-            "session_id": session_id,
-        })
+        self.audit.log(
+            "escalate",
+            {
+                "severity": severity,
+                "issues": issues,
+                "recommendation": recommendation,
+                "reason": reason,
+                "action": "escalated_to_manual",
+                "session_id": session_id,
+            },
+        )
 
         # Block and wait for user
         self.adapter.inject_fix(

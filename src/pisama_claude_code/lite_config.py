@@ -8,6 +8,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import List, Optional
 
+from pisama_claude_code.private_files import write_private_text
+
 try:
     import yaml
 except ImportError:
@@ -126,8 +128,7 @@ class LiteConfig:
             )
 
         path = config_path or DEFAULT_CONFIG_PATH
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(self.to_yaml())
+        write_private_text(path, self.to_yaml())
 
     def to_yaml(self) -> str:
         """Serialize config to YAML string."""

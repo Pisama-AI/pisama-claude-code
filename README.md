@@ -186,6 +186,10 @@ for the authoritative rates.
 ## Privacy & Security
 
 - **Local-first**: all traces are stored in `~/.claude/pisama/traces/`.
+- **Private on disk**: trace, proxy, config, sync-log, and lite-mode files use
+  user-only permissions on POSIX systems. Configuration writes are atomic.
+- **No hidden raw copy**: captured hook fields are stored once. Sensitive tool
+  input is no longer duplicated in an untokenized `raw` payload.
 - **Forwarding is opt-in**: `connect` defaults to no auto-sync. Nothing leaves
   your machine until you run `pisama-cc sync` or reconnect with `--auto-sync`.
 - **Secrets scrubbed by default**: credential-shaped strings (API keys, JWTs,
@@ -231,9 +235,9 @@ After installation, the hooks are automatically configured. To customize, edit `
 For advanced features like failure detection and self-healing, connect to the Pisama platform:
 
 ```bash
-pisama-cc connect        # Authenticate
-pisama-cc sync           # Upload traces
-pisama-cc analyze        # Run detection
+pisama-cc connect --api-key <key>  # Authenticate
+pisama-cc sync                     # Upload traces
+pisama-cc analyze                  # Run detection
 ```
 
 Platform features:
@@ -269,10 +273,14 @@ source .venv/bin/activate
 pip install -e ".[dev]"
 
 # Run tests
-pytest
+pytest --cov=pisama_claude_code --cov-fail-under=60
 
-# Run linting
-ruff check src/
+# Run the same quality gates as CI
+ruff check src/ tests/
+ruff format --check src/ tests/
+mypy src/pisama_claude_code/
+xenon --max-absolute D --max-modules C --max-average B src/pisama_claude_code
+pylint --disable=all --enable=duplicate-code --min-similarity-lines=12 src/pisama_claude_code
 ```
 
 ## Changelog

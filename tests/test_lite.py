@@ -5,25 +5,25 @@ Tests the lightweight standalone detection system:
 - LiteConfig: YAML-based configuration with defaults
 - LiteRunner: Local detection runner for loop, overflow, and repetition
 """
-import json
-import pytest
-from pathlib import Path
 
-from pisama_claude_code.lite_storage import (
-    LiteStorage,
-    LiteDetectionRecord,
-    LiteScoreRecord,
-)
-from pisama_claude_code.lite_config import LiteConfig
+import json
+
+import pytest
+
 from pisama_claude_code.lite import (
     LiteRunner,
+    _extract_content,
+    _extract_tokens,
     _hash_entry,
     _tokenize_text,
     _word_overlap,
-    _extract_content,
-    _extract_tokens,
 )
-
+from pisama_claude_code.lite_config import LiteConfig
+from pisama_claude_code.lite_storage import (
+    LiteDetectionRecord,
+    LiteScoreRecord,
+    LiteStorage,
+)
 
 # ===========================================================================
 # LiteStorage
@@ -32,17 +32,15 @@ from pisama_claude_code.lite import (
 
 class TestLiteStorage:
     def test_init_creates_db(self, tmp_path):
-        db = LiteStorage(tmp_path / "test.db")
+        LiteStorage(tmp_path / "test.db")
         assert (tmp_path / "test.db").exists()
 
     def test_init_creates_tables(self, tmp_path):
         import sqlite3
 
-        db = LiteStorage(tmp_path / "test.db")
+        LiteStorage(tmp_path / "test.db")
         conn = sqlite3.connect(str(tmp_path / "test.db"))
-        tables = conn.execute(
-            "SELECT name FROM sqlite_master WHERE type='table'"
-        ).fetchall()
+        tables = conn.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()
         table_names = {t[0] for t in tables}
         assert "lite_detections" in table_names
         assert "lite_scores" in table_names
@@ -121,18 +119,32 @@ class TestLiteStorage:
         db = LiteStorage(tmp_path / "test.db")
         db.store_detection(
             LiteDetectionRecord(
-                id="d1", trace_id="t1", session_id="s1",
-                detector_name="loop", detected=True, severity=60,
-                confidence=0.8, method="hash", details={},
-                evidence=[], created_at="2026-03-02T00:00:00Z",
+                id="d1",
+                trace_id="t1",
+                session_id="s1",
+                detector_name="loop",
+                detected=True,
+                severity=60,
+                confidence=0.8,
+                method="hash",
+                details={},
+                evidence=[],
+                created_at="2026-03-02T00:00:00Z",
             )
         )
         db.store_detection(
             LiteDetectionRecord(
-                id="d2", trace_id="t1", session_id="s1",
-                detector_name="overflow", detected=False, severity=0,
-                confidence=0.0, method="count", details={},
-                evidence=[], created_at="2026-03-02T00:01:00Z",
+                id="d2",
+                trace_id="t1",
+                session_id="s1",
+                detector_name="overflow",
+                detected=False,
+                severity=0,
+                confidence=0.0,
+                method="count",
+                details={},
+                evidence=[],
+                created_at="2026-03-02T00:01:00Z",
             )
         )
         results = db.get_detections(detected_only=True)
@@ -143,10 +155,17 @@ class TestLiteStorage:
         db = LiteStorage(tmp_path / "test.db")
         records = [
             LiteDetectionRecord(
-                id=f"d{i}", trace_id="t1", session_id="s1",
-                detector_name="loop", detected=True, severity=50,
-                confidence=0.7, method="hash", details={},
-                evidence=[], created_at=f"2026-03-02T00:0{i}:00Z",
+                id=f"d{i}",
+                trace_id="t1",
+                session_id="s1",
+                detector_name="loop",
+                detected=True,
+                severity=50,
+                confidence=0.7,
+                method="hash",
+                details={},
+                evidence=[],
+                created_at=f"2026-03-02T00:0{i}:00Z",
             )
             for i in range(5)
         ]
@@ -163,8 +182,11 @@ class TestLiteStorage:
     def test_store_and_get_score(self, tmp_path):
         db = LiteStorage(tmp_path / "test.db")
         record = LiteScoreRecord(
-            id="sc1", trace_id="t1", session_id="s1",
-            score_type="quality", overall_score=0.85,
+            id="sc1",
+            trace_id="t1",
+            session_id="s1",
+            score_type="quality",
+            overall_score=0.85,
             dimension_scores={"goal": 0.9, "coherence": 0.8},
             summary="Good conversation",
             created_at="2026-03-02T00:00:00Z",
@@ -180,18 +202,32 @@ class TestLiteStorage:
         db = LiteStorage(tmp_path / "test.db")
         db.store_detection(
             LiteDetectionRecord(
-                id="d1", trace_id="t1", session_id="s1",
-                detector_name="loop", detected=True, severity=60,
-                confidence=0.8, method="hash", details={},
-                evidence=[], created_at="2026-03-02T00:00:00Z",
+                id="d1",
+                trace_id="t1",
+                session_id="s1",
+                detector_name="loop",
+                detected=True,
+                severity=60,
+                confidence=0.8,
+                method="hash",
+                details={},
+                evidence=[],
+                created_at="2026-03-02T00:00:00Z",
             )
         )
         db.store_detection(
             LiteDetectionRecord(
-                id="d2", trace_id="t1", session_id="s1",
-                detector_name="overflow", detected=False, severity=0,
-                confidence=0.0, method="count", details={},
-                evidence=[], created_at="2026-03-02T00:01:00Z",
+                id="d2",
+                trace_id="t1",
+                session_id="s1",
+                detector_name="overflow",
+                detected=False,
+                severity=0,
+                confidence=0.0,
+                method="count",
+                details={},
+                evidence=[],
+                created_at="2026-03-02T00:01:00Z",
             )
         )
         stats = db.get_stats()
@@ -207,10 +243,17 @@ class TestLiteStorage:
         for sev in [30, 50, 75]:  # low, medium, high
             db.store_detection(
                 LiteDetectionRecord(
-                    id=f"d{sev}", trace_id="t1", session_id="s1",
-                    detector_name="loop", detected=True, severity=sev,
-                    confidence=0.8, method="hash", details={},
-                    evidence=[], created_at="2026-03-02T00:00:00Z",
+                    id=f"d{sev}",
+                    trace_id="t1",
+                    session_id="s1",
+                    detector_name="loop",
+                    detected=True,
+                    severity=sev,
+                    confidence=0.8,
+                    method="hash",
+                    details={},
+                    evidence=[],
+                    created_at="2026-03-02T00:00:00Z",
                 )
             )
         stats = db.get_stats()
@@ -222,19 +265,33 @@ class TestLiteStorage:
         db = LiteStorage(tmp_path / "test.db")
         db.store_detection(
             LiteDetectionRecord(
-                id="d1", trace_id="t1", session_id="s1",
-                detector_name="loop", detected=True, severity=60,
-                confidence=0.8, method="hash", details={"key": "val"},
-                evidence=["e1"], created_at="2026-03-02T00:00:00Z",
+                id="d1",
+                trace_id="t1",
+                session_id="s1",
+                detector_name="loop",
+                detected=True,
+                severity=60,
+                confidence=0.8,
+                method="hash",
+                details={"key": "val"},
+                evidence=["e1"],
+                created_at="2026-03-02T00:00:00Z",
             )
         )
         # Non-detected records should NOT be exported
         db.store_detection(
             LiteDetectionRecord(
-                id="d2", trace_id="t1", session_id="s1",
-                detector_name="overflow", detected=False, severity=0,
-                confidence=0.0, method="count", details={},
-                evidence=[], created_at="2026-03-02T00:01:00Z",
+                id="d2",
+                trace_id="t1",
+                session_id="s1",
+                detector_name="overflow",
+                detected=False,
+                severity=0,
+                confidence=0.0,
+                method="count",
+                details={},
+                evidence=[],
+                created_at="2026-03-02T00:01:00Z",
             )
         )
         output = tmp_path / "export.json"
@@ -253,9 +310,13 @@ class TestLiteStorage:
         db = LiteStorage(tmp_path / "test.db")
         db.store_score(
             LiteScoreRecord(
-                id="sc1", trace_id="t1", session_id="s1",
-                score_type="quality", overall_score=0.85,
-                dimension_scores={}, summary="",
+                id="sc1",
+                trace_id="t1",
+                session_id="s1",
+                score_type="quality",
+                overall_score=0.85,
+                dimension_scores={},
+                summary="",
                 created_at="2026-03-02T00:00:00Z",
             )
         )
@@ -269,18 +330,32 @@ class TestLiteStorage:
         db = LiteStorage(tmp_path / "test.db")
         db.store_detection(
             LiteDetectionRecord(
-                id="d1", trace_id="t1", session_id="s1",
-                detector_name="loop", detected=True, severity=60,
-                confidence=0.8, method="hash", details={},
-                evidence=[], created_at="2026-03-02T00:00:00Z",
+                id="d1",
+                trace_id="t1",
+                session_id="s1",
+                detector_name="loop",
+                detected=True,
+                severity=60,
+                confidence=0.8,
+                method="hash",
+                details={},
+                evidence=[],
+                created_at="2026-03-02T00:00:00Z",
             )
         )
         db.store_detection(
             LiteDetectionRecord(
-                id="d2", trace_id="t2", session_id="s1",
-                detector_name="loop", detected=True, severity=70,
-                confidence=0.9, method="hash", details={},
-                evidence=[], created_at="2026-03-02T01:00:00Z",
+                id="d2",
+                trace_id="t2",
+                session_id="s1",
+                detector_name="loop",
+                detected=True,
+                severity=70,
+                confidence=0.9,
+                method="hash",
+                details={},
+                evidence=[],
+                created_at="2026-03-02T01:00:00Z",
             )
         )
         stats = db.get_stats()
@@ -508,8 +583,7 @@ class TestLiteRunnerLoops:
         result = runner.analyze_data(entries, session_id="test-session")
         assert result["detection_count"] >= 1
         loop_detections = [
-            d for d in result["detections"]
-            if d["detector"] == "loop" and d["detected"]
+            d for d in result["detections"] if d["detector"] == "loop" and d["detected"]
         ]
         assert len(loop_detections) >= 1
 
@@ -518,14 +592,10 @@ class TestLiteRunnerLoops:
         config = LiteConfig(db_path=db_path)
         runner = LiteRunner(config)
 
-        entries = [
-            {"tool_name": "search", "tool_input": {"q": f"query-{i}"}}
-            for i in range(5)
-        ]
+        entries = [{"tool_name": "search", "tool_input": {"q": f"query-{i}"}} for i in range(5)]
         result = runner.analyze_data(entries, session_id="test-session")
         loop_detections = [
-            d for d in result["detections"]
-            if d["detector"] == "loop" and d["detected"]
+            d for d in result["detections"] if d["detector"] == "loop" and d["detected"]
         ]
         assert len(loop_detections) == 0
 
@@ -535,14 +605,10 @@ class TestLiteRunnerLoops:
         runner = LiteRunner(config)
 
         # Only 4 repeats, threshold is 5 -- should not detect
-        entries = [
-            {"tool_name": "search", "tool_input": {"q": "test"}}
-            for _ in range(4)
-        ]
+        entries = [{"tool_name": "search", "tool_input": {"q": "test"}} for _ in range(4)]
         result = runner.analyze_data(entries, session_id="test-session")
         loop_detections = [
-            d for d in result["detections"]
-            if d["detector"] == "loop" and d["detected"]
+            d for d in result["detections"] if d["detector"] == "loop" and d["detected"]
         ]
         assert len(loop_detections) == 0
 
@@ -557,8 +623,7 @@ class TestLiteRunnerLoops:
         ]
         result = runner.analyze_data(entries, session_id="s")
         loop_detections = [
-            d for d in result["detections"]
-            if d["detector"] == "loop" and d["detected"]
+            d for d in result["detections"] if d["detector"] == "loop" and d["detected"]
         ]
         assert len(loop_detections) == 0
 
@@ -579,8 +644,7 @@ class TestLiteRunnerOverflow:
         ]
         result = runner.analyze_data(entries, session_id="s")
         overflow_detections = [
-            d for d in result["detections"]
-            if d["detector"] == "overflow" and d["detected"]
+            d for d in result["detections"] if d["detector"] == "overflow" and d["detected"]
         ]
         assert len(overflow_detections) >= 1
 
@@ -594,8 +658,7 @@ class TestLiteRunnerOverflow:
         ]
         result = runner.analyze_data(entries, session_id="s")
         overflow_detections = [
-            d for d in result["detections"]
-            if d["detector"] == "overflow" and d["detected"]
+            d for d in result["detections"] if d["detector"] == "overflow" and d["detected"]
         ]
         assert len(overflow_detections) == 0
 
@@ -620,8 +683,7 @@ class TestLiteRunnerRepetition:
         ]
         result = runner.analyze_data(entries, session_id="s")
         rep_detections = [
-            d for d in result["detections"]
-            if d["detector"] == "repetition" and d["detected"]
+            d for d in result["detections"] if d["detector"] == "repetition" and d["detected"]
         ]
         assert len(rep_detections) >= 1
 
@@ -638,8 +700,7 @@ class TestLiteRunnerRepetition:
         ]
         result = runner.analyze_data(entries, session_id="s")
         rep_detections = [
-            d for d in result["detections"]
-            if d["detector"] == "repetition" and d["detected"]
+            d for d in result["detections"] if d["detector"] == "repetition" and d["detected"]
         ]
         assert len(rep_detections) == 0
 
@@ -727,9 +788,7 @@ class TestLiteRunnerGeneral:
         runner = LiteRunner(config)
 
         trace_file = tmp_path / "trace.json"
-        trace_file.write_text(
-            json.dumps([{"tool_name": "read", "tool_input": {"file": "a.py"}}])
-        )
+        trace_file.write_text(json.dumps([{"tool_name": "read", "tool_input": {"file": "a.py"}}]))
         result = runner.analyze_trace_file(trace_file, session_id="my-session")
         assert result["session_id"] == "my-session"
         # Default falls back to the file stem
@@ -738,9 +797,7 @@ class TestLiteRunnerGeneral:
 
     def test_severity_threshold_filters_positives(self, tmp_path):
         # 4 identical consecutive calls -> loop positive with severity 60
-        entries = [
-            {"tool_name": "search", "tool_input": {"q": "test"}} for _ in range(4)
-        ]
+        entries = [{"tool_name": "search", "tool_input": {"q": "test"}} for _ in range(4)]
 
         config = LiteConfig(db_path=tmp_path / "low.db", severity_threshold=40)
         assert LiteRunner(config).analyze_data(entries, session_id="s")["detection_count"] > 0

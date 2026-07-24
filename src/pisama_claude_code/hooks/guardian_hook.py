@@ -68,14 +68,17 @@ def _fallback_detection(hook_data: dict, session_id: str) -> None:
         sys.exit(0)
 
     try:
-        conn = sqlite3.connect(str(db_path))
-        cursor = conn.execute("""
-            SELECT tool_name FROM traces
-            ORDER BY created_at DESC
-            LIMIT 10
-        """)
-        recent_tools = [row[0] for row in cursor.fetchall()]
-        conn.close()
+        with sqlite3.connect(str(db_path)) as conn:
+            cursor = conn.execute(
+                """
+                SELECT tool_name FROM traces
+                WHERE session_id = ?
+                ORDER BY id DESC
+                LIMIT 10
+                """,
+                (session_id,),
+            )
+            recent_tools = [row[0] for row in cursor.fetchall()]
 
         # Add current tool
         current_tool = hook_data.get("tool_name", hook_data.get("tool", "unknown"))
@@ -86,14 +89,17 @@ def _fallback_detection(hook_data: dict, session_id: str) -> None:
             max_consecutive = 1
             current_consecutive = 1
             for i in range(1, len(tool_sequence)):
-                if tool_sequence[i] == tool_sequence[i-1]:
+                if tool_sequence[i] == tool_sequence[i - 1]:
                     current_consecutive += 1
                     max_consecutive = max(max_consecutive, current_consecutive)
                 else:
                     current_consecutive = 1
 
             if max_consecutive >= 5:
-                print(f"PISAMA: Loop detected ({current_tool} repeated {max_consecutive}x)", file=sys.stderr)
+                print(
+                    f"PISAMA: Loop detected ({current_tool} repeated {max_consecutive}x)",
+                    file=sys.stderr,
+                )
                 sys.exit(1)
 
     except Exception:
