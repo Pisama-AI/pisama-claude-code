@@ -11,6 +11,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Add Python 3.13 and a non-regression coverage floor to CI.
 - Tighten the optional `pisama-core` compatibility range.
 - Add CodeQL and pull request dependency review.
+- Raise the tested coverage floor from 55% to 60%, including a real loopback
+  OTLP export that verifies repeated exports and parent-child span relationships.
+- Enforce formatting across source and tests, a Xenon complexity ceiling, and a
+  12-line duplicate-code threshold in CI.
+- Store configuration, traces, proxy captures, sync logs, and lite-mode data
+  with user-only permissions on POSIX systems. Configuration replacement is
+  atomic.
+- Use the package version for the CLI, batch wire payloads, proxy payloads, and
+  OpenTelemetry resource metadata.
+- Stop the capture hook from retaining a second untokenized copy of its raw
+  payload.
+- Keep OpenTelemetry exports isolated from the host application's global tracer
+  provider and preserve session spans as the parents of tool-call spans.
+- Scope fallback guardian loop detection to the active session.
+- Handle project and personal skill paths consistently on macOS, Linux, and
+  Windows.
+- Preserve tool inputs delivered in an SSE content-block start event and ignore
+  malformed event shapes without losing the capture.
 
 ## [0.6.4] - 2026-07-23
 

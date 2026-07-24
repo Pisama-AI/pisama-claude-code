@@ -280,7 +280,9 @@ Use /pisama-intervene to review and decide how to proceed.
 
     def _format_block(self, severity: int, issues: list[str], directive: str) -> str:
         """Format a blocking message."""
-        issue_text = "\n".join(f"  - {i}" for i in issues) if issues else "  - Critical pattern detected"
+        issue_text = (
+            "\n".join(f"  - {i}" for i in issues) if issues else "  - Critical pattern detected"
+        )
         return f"""
 [PISAMA BLOCKED]
 Severity: {severity}/100 (Critical)
@@ -296,7 +298,9 @@ You must use /pisama-intervene to acknowledge and apply the fix before continuin
 
     def _format_terminate(self, severity: int, issues: list[str]) -> str:
         """Format a termination message."""
-        issue_text = "\n".join(f"  - {i}" for i in issues) if issues else "  - Critical failure detected"
+        issue_text = (
+            "\n".join(f"  - {i}" for i in issues) if issues else "  - Critical failure detected"
+        )
         return f"""
 [PISAMA TERMINATED]
 Severity: {severity}/100 (Critical)

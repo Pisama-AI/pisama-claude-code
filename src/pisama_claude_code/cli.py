@@ -45,6 +45,14 @@ from typing import Any, Optional
 
 import click
 
+from pisama_claude_code import __version__
+from pisama_claude_code.private_files import (
+    append_private_text,
+    ensure_private_dir,
+    make_private,
+    write_private_text,
+)
+
 httpx: Any
 try:
     import httpx
@@ -64,6 +72,8 @@ HOOKS_DIR = CLAUDE_DIR / "hooks"
 API_PREFIX = "/api/v1"
 JWT_LEEWAY_SECONDS = 60
 DEFAULT_API_URL = "https://api.pisama.ai"
+
+
 # Per-field size cap for forwarded content. Default 1 MB — generous enough for
 # essentially all tool outputs while staying safely under the platform's 10 MB
 # request-body limit (a field can appear ~2x in a span payload). Override with
@@ -95,18 +105,19 @@ def get_config() -> dict:
 
 
 def save_config(config: dict):
-    """Save Pisama config."""
-    CONFIG_DIR.mkdir(parents=True, exist_ok=True)
-    CONFIG_FILE.write_text(json.dumps(config, indent=2))
+    """Atomically save Pisama config with user-only permissions."""
+    write_private_text(CONFIG_FILE, json.dumps(config, indent=2))
 
 
 def api_url(config: dict, path: str) -> str:
     """Build a full API URL for `path` (e.g. '/traces/claude-code/ingest').
 
-    Tolerates an api_url that already includes a trailing '/api'."""
+    Tolerates an api_url that already includes a trailing '/api' or '/api/v1'."""
     base = (config.get("api_url") or DEFAULT_API_URL).rstrip("/")
-    if base.endswith("/api"):
-        base = base[: -len("/api")]
+    for suffix in (API_PREFIX, "/api"):
+        if base.endswith(suffix):
+            base = base[: -len(suffix)]
+            break
     return f"{base}{API_PREFIX}{path}"
 
 
@@ -232,7 +243,8 @@ def push_sessions(config: dict, session_ids, include_outputs: bool) -> tuple:
             resp = httpx.post(
                 api_url(config, "/traces/claude-code/ingest"),
                 headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
-                json=payload, timeout=60,
+                json=payload,
+                timeout=60,
             )
         except Exception as e:
             errors.append(f"{(sid or '?')[:12]}: network error: {e}")
@@ -289,9 +301,7 @@ def emit_span(trace: dict, config: Optional[dict] = None) -> tuple:
     # robust choice and keeps the tenant id out of the query string. get_jwt
     # populates config["tenant_id"] from the token payload.
     tenant_id = config.get("tenant_id")
-    ingest_path = (
-        f"/tenants/{tenant_id}/traces/ingest" if tenant_id else "/traces/ingest"
-    )
+    ingest_path = f"/tenants/{tenant_id}/traces/ingest" if tenant_id else "/traces/ingest"
 
     from pisama_claude_code.otel_export import convert_trace_to_otel_dict
 
@@ -339,7 +349,7 @@ def emit_span(trace: dict, config: Optional[dict] = None) -> tuple:
 
 
 @click.group()
-@click.version_option(version="0.6.3")
+@click.version_option(version=__version__)
 def main():
     """Pisama Claude Code - Trace capture and sync."""
     pass
@@ -358,6 +368,7 @@ def install(force: bool, no_auto_config: bool):
     Use --no-auto-config to skip automatic configuration.
     """
     from pisama_claude_code.install import install as do_install
+
     do_install(force=force, auto_config=not no_auto_config)
 
 
@@ -375,6 +386,7 @@ def verify():
     import sys
 
     from pisama_claude_code.install import verify as do_verify
+
     success = do_verify()
     sys.exit(0 if success else 1)
 
@@ -383,6 +395,7 @@ def verify():
 def uninstall():
     """Remove Pisama hooks from ~/.claude/hooks/."""
     from pisama_claude_code.install import uninstall as do_uninstall
+
     do_uninstall()
 
 
@@ -410,11 +423,13 @@ def demo(verbose: bool):
         # Python 3.9+ compatible way to get package resources
         try:
             from importlib.resources import files
+
             sample_path = files("pisama_claude_code.sample_traces").joinpath("demo_loop.jsonl")
             sample_content = sample_path.read_text()
         except (ImportError, TypeError):
             # Fallback for older Python
             import pkg_resources
+
             sample_content = pkg_resources.resource_string(
                 "pisama_claude_code", "sample_traces/demo_loop.jsonl"
             ).decode("utf-8")
@@ -524,7 +539,10 @@ def _run_local_detection(traces: list) -> list:
     # Check for loop detection
     if len(traces) >= 3:
         # Check for exact message loops
-        tool_calls = [(t.get("tool_name", ""), json.dumps(t.get("tool_input", {}), sort_keys=True)) for t in traces]
+        tool_calls = [
+            (t.get("tool_name", ""), json.dumps(t.get("tool_input", {}), sort_keys=True))
+            for t in traces
+        ]
 
         # Find repeated sequences
         consecutive_same = 1
@@ -545,19 +563,21 @@ def _run_local_detection(traces: list) -> list:
             confidence = min(95, 70 + (max_consecutive - 3) * 5)
             severity = min(80, 40 + max_consecutive * 5)
 
-            detections.append({
-                "type": "Tool Loop Detected",
-                "confidence": confidence,
-                "severity": severity,
-                "explanation": f"Your agent called '{repeated_tool}' {max_consecutive} times in a row with identical parameters. This indicates the agent is stuck repeating the same action without making progress.",
-                "business_impact": "This wastes compute resources and API credits. The agent will likely time out without completing the task.",
-                "suggested_action": f"Add a retry limit (recommend max 3 attempts) for '{repeated_tool}'. Consider caching results to avoid duplicate calls.",
-                "details": {
-                    "tool_name": repeated_tool,
-                    "repetition_count": max_consecutive,
-                    "detection_method": "exact_hash_match",
-                },
-            })
+            detections.append(
+                {
+                    "type": "Tool Loop Detected",
+                    "confidence": confidence,
+                    "severity": severity,
+                    "explanation": f"Your agent called '{repeated_tool}' {max_consecutive} times in a row with identical parameters. This indicates the agent is stuck repeating the same action without making progress.",
+                    "business_impact": "This wastes compute resources and API credits. The agent will likely time out without completing the task.",
+                    "suggested_action": f"Add a retry limit (recommend max 3 attempts) for '{repeated_tool}'. Consider caching results to avoid duplicate calls.",
+                    "details": {
+                        "tool_name": repeated_tool,
+                        "repetition_count": max_consecutive,
+                        "detection_method": "exact_hash_match",
+                    },
+                }
+            )
 
     # Check for semantic loops (same tool, different params but same pattern)
     tool_sequence = [t.get("tool_name", "") for t in traces]
@@ -568,19 +588,21 @@ def _run_local_detection(traces: list) -> list:
     for tool, count in tool_counts.items():
         if count >= 4 and count / len(traces) > 0.6:
             # High concentration of one tool
-            detections.append({
-                "type": "Tool Overuse Pattern",
-                "confidence": 75,
-                "severity": 45,
-                "explanation": f"'{tool}' was called {count} times ({int(count/len(traces)*100)}% of all calls). This suggests the agent may be over-relying on one approach.",
-                "business_impact": "The agent might be missing more effective strategies or tools for the task.",
-                "suggested_action": f"Review why '{tool}' is being called so frequently. Consider adding alternative approaches or result caching.",
-                "details": {
-                    "tool_name": tool,
-                    "call_count": count,
-                    "percentage": f"{int(count/len(traces)*100)}%",
-                },
-            })
+            detections.append(
+                {
+                    "type": "Tool Overuse Pattern",
+                    "confidence": 75,
+                    "severity": 45,
+                    "explanation": f"'{tool}' was called {count} times ({int(count / len(traces) * 100)}% of all calls). This suggests the agent may be over-relying on one approach.",
+                    "business_impact": "The agent might be missing more effective strategies or tools for the task.",
+                    "suggested_action": f"Review why '{tool}' is being called so frequently. Consider adding alternative approaches or result caching.",
+                    "details": {
+                        "tool_name": tool,
+                        "call_count": count,
+                        "percentage": f"{int(count / len(traces) * 100)}%",
+                    },
+                }
+            )
 
     return detections
 
@@ -592,7 +614,14 @@ def _run_local_detection(traces: list) -> list:
 @click.option("--verbose", "-v", is_flag=True, help="Show token usage and cost")
 @click.option("--content", "-c", is_flag=True, help="Show input/reasoning/output content")
 @click.option("--reasoning", "-r", is_flag=True, help="Show reasoning (thinking) content only")
-def traces(last: int, tool: Optional[str], session: Optional[str], verbose: bool, content: bool, reasoning: bool):
+def traces(
+    last: int,
+    tool: Optional[str],
+    session: Optional[str],
+    verbose: bool,
+    content: bool,
+    reasoning: bool,
+):
     """View recent traces."""
     all_traces = load_recent_traces(last * 3)  # Load extra for filtering
 
@@ -650,7 +679,9 @@ def traces(last: int, tool: Optional[str], session: Optional[str], verbose: bool
     # Show totals if we have usage data
     if verbose and (total_input or total_output or total_cost):
         click.echo("─" * 70)
-        click.echo(f"Totals: {total_input:,} input + {total_output:,} output tokens = ${total_cost:.4f}")
+        click.echo(
+            f"Totals: {total_input:,} input + {total_output:,} output tokens = ${total_cost:.4f}"
+        )
 
 
 def _truncate(text: str, max_len: int = 200) -> str:
@@ -666,8 +697,11 @@ def _truncate(text: str, max_len: int = 200) -> str:
 @main.command()
 @click.option("--api-key", required=True, help="Your Pisama API key")
 @click.option("--api-url", "api_url_opt", default=DEFAULT_API_URL, help="API base URL")
-@click.option("--auto-sync/--no-auto-sync", default=False,
-              help="Auto-forward each session on Stop (off by default; forwarding is opt-in)")
+@click.option(
+    "--auto-sync/--no-auto-sync",
+    default=False,
+    help="Auto-forward each session on Stop (off by default; forwarding is opt-in)",
+)
 def connect(api_key: str, api_url_opt: str, auto_sync: bool):
     """Connect to Pisama platform (validates the key by exchanging it for a token)."""
     if httpx is None:
@@ -727,7 +761,9 @@ def forward(state: str):
     save_config(config)
     if state == "on":
         click.echo("✅ Real-time forwarding ENABLED.")
-        click.echo(f"   New Claude Code sessions stream live to {config.get('api_url') or DEFAULT_API_URL}")
+        click.echo(
+            f"   New Claude Code sessions stream live to {config.get('api_url') or DEFAULT_API_URL}"
+        )
         click.echo("   (one appended span per tool call; reasoning via 'pisama-cc proxy serve').")
     else:
         click.echo("✅ Real-time forwarding disabled — capture stays local.")
@@ -735,7 +771,9 @@ def forward(state: str):
 
 @main.command()
 @click.option("--last", default=200, help="Recency window (traces) used to pick sessions")
-@click.option("--include-outputs/--no-outputs", default=True, help="Include tool outputs (full content)")
+@click.option(
+    "--include-outputs/--no-outputs", default=True, help="Include tool outputs (full content)"
+)
 def sync(last: int, include_outputs: bool):
     """Sync recent sessions to the Pisama platform (complete sessions, idempotent)."""
     if httpx is None:
@@ -861,6 +899,7 @@ def display_analysis_results(results: dict):
 # FIX COMMANDS - Self-Healing Fix Application
 # =============================================================================
 
+
 @main.group()
 def fix():
     """Self-healing fix commands."""
@@ -983,7 +1022,9 @@ def fix_show(fix_id: str, detection_id: str):
                 click.echo("\n" + "─" * 60)
                 click.echo("Code Changes:")
                 for change in code_changes:
-                    click.echo(f"\n📄 {change.get('file_path', 'unknown')} ({change.get('language', '')})")
+                    click.echo(
+                        f"\n📄 {change.get('file_path', 'unknown')} ({change.get('language', '')})"
+                    )
                     if change.get("description"):
                         click.echo(f"   {change['description']}")
                     if change.get("diff"):
@@ -1164,9 +1205,13 @@ def status():
         if connected_at:
             click.echo(f"   Connected at: {connected_at[:19]}")
         if config_data.get("auto_sync"):
-            click.echo(f"   📡 Real-time forwarding: ON — every session streams live to {config_data.get('api_url', 'the platform')}")
+            click.echo(
+                f"   📡 Real-time forwarding: ON — every session streams live to {config_data.get('api_url', 'the platform')}"
+            )
         else:
-            click.echo("   📡 Real-time forwarding: OFF (capture is local-only) — enable with 'pisama-cc forward on'")
+            click.echo(
+                "   📡 Real-time forwarding: OFF (capture is local-only) — enable with 'pisama-cc forward on'"
+            )
         excluded = config_data.get("forward_exclude_sessions") or []
         if excluded:
             click.echo(f"   🚫 Excluded from forwarding: {len(excluded)} session(s)")
@@ -1301,7 +1346,9 @@ def usage(last: int, by_model: bool, by_tool: bool):
 @click.option("--last", default=50, help="Number of traces to export")
 @click.option("--output", "-o", default="traces-export.jsonl", help="Output file")
 @click.option("--compress", is_flag=True, help="Gzip compress output")
-@click.option("--format", "fmt", type=click.Choice(["jsonl", "otel"]), default="jsonl", help="Export format")
+@click.option(
+    "--format", "fmt", type=click.Choice(["jsonl", "otel"]), default="jsonl", help="Export format"
+)
 def export(last: int, output: str, compress: bool, fmt: str):
     """Export traces to a file (JSONL or OTEL format)."""
     traces_list = load_recent_traces(last)
@@ -1367,6 +1414,7 @@ def export(last: int, output: str, compress: bool, fmt: str):
         with open(output_path, "w") as f:
             for trace in export_data:
                 f.write(json.dumps(trace) + "\n")
+    make_private(output_path)
 
     size_kb = output_path.stat().st_size // 1024
     click.echo(f"✅ Exported {len(export_data)} traces to {output_path} ({size_kb} KB)")
@@ -1374,9 +1422,16 @@ def export(last: int, output: str, compress: bool, fmt: str):
 
 @main.command("export-otel")
 @click.option("--last", default=50, help="Number of traces to export")
-@click.option("--endpoint", "-e", required=True, help="OTEL collector endpoint (e.g., http://localhost:4318/v1/traces)")
+@click.option(
+    "--endpoint",
+    "-e",
+    required=True,
+    help="OTEL collector endpoint (e.g., http://localhost:4318/v1/traces)",
+)
 @click.option("--service-name", "-s", default="claude-code", help="Service name for spans")
-@click.option("--header", "-H", multiple=True, help="Header in 'key=value' format (can be repeated)")
+@click.option(
+    "--header", "-H", multiple=True, help="Header in 'key=value' format (can be repeated)"
+)
 def export_otel(last: int, endpoint: str, service_name: str, header: tuple):
     """Export traces to an OpenTelemetry collector.
 
@@ -1437,6 +1492,7 @@ def export_otel(last: int, endpoint: str, service_name: str, header: tuple):
 
 # Helper functions
 
+
 def normalize_trace(t: dict) -> dict:
     """Normalize trace to consistent format (handles old and new formats)."""
     # New format uses 'name', old uses 'tool_name'
@@ -1485,7 +1541,9 @@ def normalize_trace(t: dict) -> dict:
         "cache_read_tokens": cache_read,
         "cost_usd": t.get("cost_usd", 0.0),
         # Tool output (flat record) or output_data (legacy span record)
-        "tool_output": t.get("tool_output") if t.get("tool_output") is not None else t.get("output_data"),
+        "tool_output": t.get("tool_output")
+        if t.get("tool_output") is not None
+        else t.get("output_data"),
         # Input/Reasoning/Output content
         "user_input": t.get("user_input"),
         "reasoning": t.get("reasoning"),
@@ -1564,17 +1622,20 @@ def _traces_for_sessions(session_ids) -> list:
 # before it is forwarded to the platform. This runs by default on every install
 # (no extras, no keychain) so secrets never leave the machine un-scrubbed. The
 # optional [core] extra adds pisama-core's reversible keychain vault on top.
-_SECRET_PATTERNS = [re.compile(p) for p in [
-    r"sk-ant-[A-Za-z0-9_\-]{20,}",                         # Anthropic API keys
-    r"sk-[A-Za-z0-9]{20,}",                                # OpenAI-style keys
-    r"pisama_[A-Za-z0-9_\-]{20,}",                         # Pisama API keys
-    r"eyJ[A-Za-z0-9_\-]{8,}\.[A-Za-z0-9_\-]{8,}\.[A-Za-z0-9_\-]+",  # JWTs
-    r"gh[pousr]_[A-Za-z0-9]{20,}",                         # GitHub tokens
-    r"github_pat_[A-Za-z0-9_]{20,}",                       # GitHub fine-grained PATs
-    r"AKIA[0-9A-Z]{16}",                                   # AWS access key id
-    r"xox[baprs]-[A-Za-z0-9\-]{10,}",                      # Slack tokens
-    r"AIza[0-9A-Za-z_\-]{30,}",                            # Google API keys
-]]
+_SECRET_PATTERNS = [
+    re.compile(p)
+    for p in [
+        r"sk-ant-[A-Za-z0-9_\-]{20,}",  # Anthropic API keys
+        r"sk-[A-Za-z0-9]{20,}",  # OpenAI-style keys
+        r"pisama_[A-Za-z0-9_\-]{20,}",  # Pisama API keys
+        r"eyJ[A-Za-z0-9_\-]{8,}\.[A-Za-z0-9_\-]{8,}\.[A-Za-z0-9_\-]+",  # JWTs
+        r"gh[pousr]_[A-Za-z0-9]{20,}",  # GitHub tokens
+        r"github_pat_[A-Za-z0-9_]{20,}",  # GitHub fine-grained PATs
+        r"AKIA[0-9A-Z]{16}",  # AWS access key id
+        r"xox[baprs]-[A-Za-z0-9\-]{10,}",  # Slack tokens
+        r"AIza[0-9A-Za-z_\-]{30,}",  # Google API keys
+    ]
+]
 
 
 def _scrub_secrets(s: str) -> str:
@@ -1599,7 +1660,11 @@ def _cap_field(value):
     if scrubbed != serialized:
         # Contained a secret; return the scrubbed (flattened) form rather than
         # the original structure, so nothing sensitive slips through.
-        return scrubbed if len(scrubbed) <= MAX_FIELD_CHARS else scrubbed[:MAX_FIELD_CHARS] + "...[truncated]"
+        return (
+            scrubbed
+            if len(scrubbed) <= MAX_FIELD_CHARS
+            else scrubbed[:MAX_FIELD_CHARS] + "...[truncated]"
+        )
     if len(serialized) <= MAX_FIELD_CHARS:
         return value
     return serialized[:MAX_FIELD_CHARS] + "...[truncated]"
@@ -1622,7 +1687,9 @@ def prepare_sync_payload(traces: list, include_outputs: bool) -> dict:
             "output_tokens": t.get("output_tokens"),
             "cost_usd": t.get("cost_usd"),
             # Input/Reasoning/Output content (secrets scrubbed + bounded)
-            "user_input": _cap_field(t.get("user_input")) if t.get("user_input") is not None else None,
+            "user_input": _cap_field(t.get("user_input"))
+            if t.get("user_input") is not None
+            else None,
             "reasoning": _cap_field(t.get("reasoning")) if t.get("reasoning") is not None else None,
             "ai_output": _cap_field(t.get("ai_output")) if t.get("ai_output") is not None else None,
             # Agent identity — lets the backend keep parallel subagents apart
@@ -1646,7 +1713,7 @@ def prepare_sync_payload(traces: list, include_outputs: bool) -> dict:
 
     return {
         "source": "claude-code",
-        "version": "0.5.0",
+        "version": __version__,
         "uploaded_at": datetime.now(timezone.utc).isoformat(),
         "trace_count": len(clean_traces),
         "traces": clean_traces,
@@ -1687,14 +1754,19 @@ def anonymize_path(path: str) -> str:
 def mark_synced(traces: list):
     """Mark traces as synced (for deduplication)."""
     sync_log = CONFIG_DIR / "sync_log.jsonl"
-    CONFIG_DIR.mkdir(parents=True, exist_ok=True)
-    with open(sync_log, "a") as f:
-        for t in traces:
-            f.write(json.dumps({
-                "synced_at": datetime.now(timezone.utc).isoformat(),
-                "timestamp": t.get("timestamp"),
-                "session_id": t.get("session_id"),
-            }) + "\n")
+    records = []
+    for t in traces:
+        records.append(
+            json.dumps(
+                {
+                    "synced_at": datetime.now(timezone.utc).isoformat(),
+                    "timestamp": t.get("timestamp"),
+                    "session_id": t.get("session_id"),
+                }
+            )
+        )
+    if records:
+        append_private_text(sync_log, "".join(record + "\n" for record in records))
 
 
 def _synced_keys() -> set:
@@ -1727,6 +1799,7 @@ def _synced_keys() -> set:
 # PROXY COMMANDS - full-fidelity capture (reasoning + exact API payloads)
 # =============================================================================
 
+
 @main.group()
 def proxy():
     """Full-fidelity capture via a logging reverse-proxy.
@@ -1741,6 +1814,7 @@ def proxy():
 
 def _proxy_module():
     from pisama_claude_code import proxy as proxy_mod
+
     return proxy_mod
 
 
@@ -1764,11 +1838,15 @@ def proxy_serve(port: int, upstream: str, forward: bool, print_env: bool):
 
 @proxy.command("install")
 @click.option("--port", default=8788, help="Local port for the proxy")
-@click.option("--always-on/--print-only", default=False,
-              help="Wire ANTHROPIC_BASE_URL globally + auto-start (launchd). Default just prints opt-in steps.")
+@click.option(
+    "--always-on/--print-only",
+    default=False,
+    help="Wire ANTHROPIC_BASE_URL globally + auto-start (launchd). Default just prints opt-in steps.",
+)
 def proxy_install(port: int, always_on: bool):
     """Set up the proxy: opt-in instructions, or always-on auto-start."""
     import subprocess
+
     P = _proxy_module()
     if P.web is None:
         click.echo("❌ aiohttp required. Run: pip install 'pisama-claude-code[proxy]'")
@@ -1790,17 +1868,19 @@ def proxy_install(port: int, always_on: bool):
         click.echo("   ⚠️  If the proxy is not running, Claude Code cannot reach the API.")
         return
 
-    P.PROXY_DIR.mkdir(parents=True, exist_ok=True)
+    ensure_private_dir(P.PROXY_DIR)
     P.LAUNCHD_PLIST.parent.mkdir(parents=True, exist_ok=True)
     P.LAUNCHD_PLIST.write_text(P.launchd_plist_xml(port))
     subprocess.run(["launchctl", "unload", str(P.LAUNCHD_PLIST)], capture_output=True)
-    res = subprocess.run(["launchctl", "load", "-w", str(P.LAUNCHD_PLIST)], capture_output=True, text=True)
+    res = subprocess.run(
+        ["launchctl", "load", "-w", str(P.LAUNCHD_PLIST)], capture_output=True, text=True
+    )
     if res.returncode != 0:
         click.echo(f"❌ launchctl load failed: {res.stderr.strip()}")
         click.echo(f"   Plist written to {P.LAUNCHD_PLIST}")
         return
-    url = P.set_base_url(port)               # forward-compat (interactive may honor it)
-    profile = P.add_shell_export(port)       # the mechanism Claude Code actually honors
+    url = P.set_base_url(port)  # forward-compat (interactive may honor it)
+    profile = P.add_shell_export(port)  # the mechanism Claude Code actually honors
     click.echo(f"✅ Always-on proxy installed: {url} (launchd KeepAlive, auto-restarts)")
     click.echo(f"   Plist:   {P.LAUNCHD_PLIST}")
     click.echo(f"   Profile: {profile} (export ANTHROPIC_BASE_URL)")
@@ -1813,6 +1893,7 @@ def proxy_install(port: int, always_on: bool):
 def proxy_uninstall():
     """Tear down always-on: unload launchd + remove ANTHROPIC_BASE_URL."""
     import subprocess
+
     P = _proxy_module()
     if sys.platform == "darwin" and P.LAUNCHD_PLIST.exists():
         subprocess.run(["launchctl", "unload", str(P.LAUNCHD_PLIST)], capture_output=True)
@@ -1840,11 +1921,17 @@ def proxy_status(port: int):
         except Exception:
             pass
     click.echo(f"Proxy:        {health}")
-    click.echo(f"Routing:      settings.json env = {P.configured_base_url() or '(not set)'} (note: CC ignores this for base-url)")
+    click.echo(
+        f"Routing:      settings.json env = {P.configured_base_url() or '(not set)'} (note: CC ignores this for base-url)"
+    )
     shell_on = P.SHELL_PROFILE.exists() and P.SHELL_MARKER_BEGIN in P.SHELL_PROFILE.read_text()
-    click.echo(f"Shell export: {'~/.zshrc (active — the mechanism CC honors)' if shell_on else '(not set)'}")
+    click.echo(
+        f"Shell export: {'~/.zshrc (active — the mechanism CC honors)' if shell_on else '(not set)'}"
+    )
     if sys.platform == "darwin":
-        click.echo(f"Auto-start:   {'installed' if P.LAUNCHD_PLIST.exists() else 'not installed'} (launchd)")
+        click.echo(
+            f"Auto-start:   {'installed' if P.LAUNCHD_PLIST.exists() else 'not installed'} (launchd)"
+        )
     # Capture counts (today)
     today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
     f = P.PROXY_DIR / f"calls-{today}.jsonl"
@@ -1856,7 +1943,7 @@ def proxy_status(port: int):
                 continue
             n += 1
             try:
-                if (json.loads(line).get("reasoning")):
+                if json.loads(line).get("reasoning"):
                     with_reasoning += 1
             except ValueError:
                 pass
@@ -1866,6 +1953,7 @@ def proxy_status(port: int):
 # =============================================================================
 # VAULT COMMANDS - PII Tokenization Vault Management
 # =============================================================================
+
 
 @main.group()
 def vault():
@@ -2064,7 +2152,9 @@ def vault_delete(
 
         elif value_hash:
             if not confirm:
-                click.confirm(f"Delete all tokens with value hash {value_hash[:16]}...?", abort=True)
+                click.confirm(
+                    f"Delete all tokens with value hash {value_hash[:16]}...?", abort=True
+                )
 
             count = token_vault.delete_by_value_hash(value_hash)
             if count > 0:
@@ -2125,6 +2215,7 @@ def vault_health():
     if vault_path.exists():
         try:
             import sqlite3
+
             conn = sqlite3.connect(str(vault_path))
             result = conn.execute("PRAGMA integrity_check").fetchone()
             if result[0] == "ok":
@@ -2168,6 +2259,7 @@ def vault_backup(output: Optional[str]):
 
     # Copy vault
     import shutil
+
     try:
         shutil.copy2(vault_path, backup_path)
         size_kb = backup_path.stat().st_size // 1024
@@ -2193,6 +2285,7 @@ def vault_restore(backup_path: str, confirm: bool):
         click.confirm("This will overwrite the current vault. Continue?", abort=True)
 
     import shutil
+
     try:
         shutil.copy2(backup, vault_path)
         click.echo(f"✅ Vault restored from {backup_path}")
@@ -2236,7 +2329,6 @@ def _log_vault_access(target: str, reason: str, ticket: Optional[str], action: s
     import os
 
     audit_log = CONFIG_DIR / "audit_log.jsonl"
-    audit_log.parent.mkdir(parents=True, exist_ok=True)
 
     entry = {
         "timestamp": datetime.now(timezone.utc).isoformat(),
@@ -2247,13 +2339,13 @@ def _log_vault_access(target: str, reason: str, ticket: Optional[str], action: s
         "principal": os.environ.get("USER", "unknown"),
     }
 
-    with open(audit_log, "a") as f:
-        f.write(json.dumps(entry) + "\n")
+    append_private_text(audit_log, json.dumps(entry) + "\n")
 
 
 # =============================================================================
 # TOKENIZE COMMAND - Manual tokenization testing
 # =============================================================================
+
 
 @main.group()
 def tokenize():
@@ -2285,12 +2377,12 @@ def tokenize_test(text: str, patterns: Optional[str]):
 
     click.echo("PII Detection Results")
     click.echo("=" * 50)
-    click.echo(f"\nInput: \"{text}\"")
+    click.echo(f'\nInput: "{text}"')
 
     if matches:
         click.echo("\nDetected:")
         for m in matches:
-            click.echo(f"  [{m.pii_type}] \"{m.value}\" at position {m.start}-{m.end}")
+            click.echo(f'  [{m.pii_type}] "{m.value}" at position {m.start}-{m.end}')
     else:
         click.echo("\nNo PII detected")
 
@@ -2325,6 +2417,7 @@ def tokenize_config():
 # =============================================================================
 # LITE MODE COMMANDS - Standalone detection without platform
 # =============================================================================
+
 
 @main.group()
 def lite():
@@ -2388,9 +2481,9 @@ def lite_init(
     config.severity_threshold = severity_threshold
 
     # Create directories
-    DEFAULT_CONFIG_DIR.mkdir(parents=True, exist_ok=True)
-    config.traces_dir.mkdir(parents=True, exist_ok=True)
-    config.db_path.parent.mkdir(parents=True, exist_ok=True)
+    ensure_private_dir(DEFAULT_CONFIG_DIR)
+    ensure_private_dir(config.traces_dir)
+    ensure_private_dir(config.db_path.parent)
 
     # Save config
     try:
@@ -2398,7 +2491,7 @@ def lite_init(
     except ImportError:
         click.echo("Warning: PyYAML not installed. Saving as JSON fallback.")
         fallback_path = DEFAULT_CONFIG_DIR / "config.json"
-        fallback_path.write_text(json.dumps(config.to_dict(), indent=2))
+        write_private_text(fallback_path, json.dumps(config.to_dict(), indent=2))
         click.echo(f"   Config saved to: {fallback_path}")
         click.echo("   Install PyYAML for YAML support: pip install pyyaml")
 
@@ -2499,7 +2592,9 @@ def lite_analyze(
         else:
             level = "LOW"
 
-        click.echo(f"  [{level}] {det['detector']} (severity={severity}, confidence={det['confidence']:.0%})")
+        click.echo(
+            f"  [{level}] {det['detector']} (severity={severity}, confidence={det['confidence']:.0%})"
+        )
         click.echo(f"         Method: {det['method']}")
 
         if verbose and det.get("details"):
@@ -2569,7 +2664,7 @@ def lite_dashboard():
         for name, counts in sorted(by_det.items()):
             detected = counts.get("detected", 0)
             total = counts.get("total", 0)
-            rate = f"{detected/total*100:.0f}%" if total > 0 else "0%"
+            rate = f"{detected / total * 100:.0f}%" if total > 0 else "0%"
             click.echo(f"    {name:<15} {detected:>4} / {total:>4} ({rate})")
 
     # Recent detections
@@ -2577,7 +2672,9 @@ def lite_dashboard():
     if recent:
         click.echo("")
         click.echo("  Recent Issues (last 10):")
-        click.echo(f"  {'Detector':<15} {'Severity':>8} {'Confidence':>10} {'Session':<14} {'When'}")
+        click.echo(
+            f"  {'Detector':<15} {'Severity':>8} {'Confidence':>10} {'Session':<14} {'When'}"
+        )
         click.echo("  " + "-" * 65)
 
         for d in recent:

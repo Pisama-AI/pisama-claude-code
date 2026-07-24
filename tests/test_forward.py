@@ -11,36 +11,42 @@ from pisama_claude_code.hooks import forward_hook
 
 
 def _jwt(exp, tenant="t-1"):
-    payload = base64.urlsafe_b64encode(
-        json.dumps({"exp": exp, "tenant_id": tenant}).encode()
-    ).decode().rstrip("=")
+    payload = (
+        base64.urlsafe_b64encode(json.dumps({"exp": exp, "tenant_id": tenant}).encode())
+        .decode()
+        .rstrip("=")
+    )
     return f"h.{payload}.s"
 
 
 def _record(session_id, tool, output, ts):
-    return json.dumps({
-        "session_id": session_id,
-        "timestamp": ts,
-        "hook_type": "post",
-        "tool_name": tool,
-        "tool_input": {"command": "x"},
-        "tool_output": output,
-        "user_input": "hi",
-        "ai_output": "ok",
-        "model": "claude",
-        "usage": {"input_tokens": 1, "output_tokens": 2},
-        "cost_usd": 0.0,
-    })
+    return json.dumps(
+        {
+            "session_id": session_id,
+            "timestamp": ts,
+            "hook_type": "post",
+            "tool_name": tool,
+            "tool_input": {"command": "x"},
+            "tool_output": output,
+            "user_input": "hi",
+            "ai_output": "ok",
+            "model": "claude",
+            "usage": {"input_tokens": 1, "output_tokens": 2},
+            "cost_usd": 0.0,
+        }
+    )
 
 
 def test_api_url_builds_prefix():
-    assert cli.api_url(
-        {"api_url": "http://localhost:8000"}, "/traces/claude-code/ingest"
-    ) == "http://localhost:8000/api/v1/traces/claude-code/ingest"
+    assert (
+        cli.api_url({"api_url": "http://localhost:8000"}, "/traces/claude-code/ingest")
+        == "http://localhost:8000/api/v1/traces/claude-code/ingest"
+    )
     # tolerates a trailing /api and trailing slash
-    assert cli.api_url(
-        {"api_url": "https://api.pisama.ai/api/"}, "/auth/token"
-    ) == "https://api.pisama.ai/api/v1/auth/token"
+    assert (
+        cli.api_url({"api_url": "https://api.pisama.ai/api/"}, "/auth/token")
+        == "https://api.pisama.ai/api/v1/auth/token"
+    )
 
 
 def test_get_jwt_exchanges_and_caches(tmp_path, monkeypatch):
@@ -60,7 +66,8 @@ def test_get_jwt_exchanges_and_caches(tmp_path, monkeypatch):
         url = mock_httpx.post.call_args.args[0]
         assert url.endswith("/api/v1/auth/token")
         assert mock_httpx.post.call_args.kwargs["json"] == {
-            "api_key": "pisama_x", "scope": "ingest"
+            "api_key": "pisama_x",
+            "scope": "ingest",
         }
 
         # Cached: a second call must not re-exchange.
@@ -81,9 +88,12 @@ def test_push_sessions_forwards_complete_session(tmp_path, monkeypatch):
     traces_dir = tmp_path / "traces"
     traces_dir.mkdir()
     (traces_dir / "traces-2026-01-01.jsonl").write_text(
-        _record("s1", "Bash", "OUT1", "2026-01-01T00:00:01+00:00") + "\n"
-        + _record("s1", "Read", "OUT2", "2026-01-01T00:00:02+00:00") + "\n"
-        + _record("s2", "Bash", "OUT3", "2026-01-01T00:00:03+00:00") + "\n"
+        _record("s1", "Bash", "OUT1", "2026-01-01T00:00:01+00:00")
+        + "\n"
+        + _record("s1", "Read", "OUT2", "2026-01-01T00:00:02+00:00")
+        + "\n"
+        + _record("s2", "Bash", "OUT3", "2026-01-01T00:00:03+00:00")
+        + "\n"
     )
     monkeypatch.setattr(cli, "TRACES_DIR", traces_dir)
     monkeypatch.setattr(cli, "CONFIG_FILE", tmp_path / "config.json")
@@ -193,11 +203,15 @@ def test_forward_hook_skips_excluded_session(tmp_path, monkeypatch):
     monkeypatch.setattr(cli, "TRACES_DIR", traces_dir)
     monkeypatch.setattr(cli, "CONFIG_FILE", tmp_path / "config.json")
     monkeypatch.setattr(cli, "CONFIG_DIR", tmp_path)
-    cli.save_config({
-        "api_key": "pisama_x", "api_url": "http://localhost:8000",
-        "auto_sync": True, "tenant_id": "t-1",
-        "forward_exclude_sessions": ["secret-sess"],
-    })
+    cli.save_config(
+        {
+            "api_key": "pisama_x",
+            "api_url": "http://localhost:8000",
+            "auto_sync": True,
+            "tenant_id": "t-1",
+            "forward_exclude_sessions": ["secret-sess"],
+        }
+    )
     monkeypatch.setattr(sys, "stdin", io.StringIO(json.dumps({"session_id": "secret-sess"})))
     with patch.object(cli, "httpx") as mock_httpx:
         forward_hook.main()
@@ -206,6 +220,7 @@ def test_forward_hook_skips_excluded_session(tmp_path, monkeypatch):
 
 def test_forward_command_toggles_auto_sync(tmp_path, monkeypatch):
     from click.testing import CliRunner
+
     monkeypatch.setattr(cli, "CONFIG_FILE", tmp_path / "config.json")
     monkeypatch.setattr(cli, "CONFIG_DIR", tmp_path)
     cli.save_config({"api_key": "pisama_x", "api_url": "https://api.pisama.ai", "auto_sync": False})
@@ -221,6 +236,7 @@ def test_forward_command_toggles_auto_sync(tmp_path, monkeypatch):
 
 def test_forward_command_requires_connection(tmp_path, monkeypatch):
     from click.testing import CliRunner
+
     monkeypatch.setattr(cli, "CONFIG_FILE", tmp_path / "config.json")
     monkeypatch.setattr(cli, "CONFIG_DIR", tmp_path)
     r = CliRunner().invoke(cli.main, ["forward", "on"])
@@ -247,11 +263,13 @@ def test_forward_hook_forwards_when_connected(tmp_path, monkeypatch):
     monkeypatch.setattr(cli, "TRACES_DIR", traces_dir)
     monkeypatch.setattr(cli, "CONFIG_FILE", tmp_path / "config.json")
     monkeypatch.setattr(cli, "CONFIG_DIR", tmp_path)
-    cli.save_config({
-        "api_key": "pisama_x",
-        "api_url": "http://localhost:8000",
-        "auto_sync": True,
-    })
+    cli.save_config(
+        {
+            "api_key": "pisama_x",
+            "api_url": "http://localhost:8000",
+            "auto_sync": True,
+        }
+    )
     monkeypatch.setattr(sys, "stdin", io.StringIO(json.dumps({"session_id": "s1"})))
 
     token = _jwt(99999999999)
@@ -261,8 +279,7 @@ def test_forward_hook_forwards_when_connected(tmp_path, monkeypatch):
         posted.append((url, kw.get("json")))
         r = MagicMock(status_code=200 if url.endswith("/auth/token") else 202)
         r.json.return_value = (
-            {"access_token": token} if url.endswith("/auth/token")
-            else {"accepted": 1}
+            {"access_token": token} if url.endswith("/auth/token") else {"accepted": 1}
         )
         return r
 
@@ -335,9 +352,16 @@ def test_fix_commands_hit_api_v1_detections(tmp_path, monkeypatch):
     def fake_get(url, **kw):
         urls["get"].append(url)
         r = MagicMock(status_code=200)
-        r.json.return_value = {"suggestions": [{
-            "id": "FIX1", "title": "T", "fix_type": "prompt", "confidence": "high",
-        }]}
+        r.json.return_value = {
+            "suggestions": [
+                {
+                    "id": "FIX1",
+                    "title": "T",
+                    "fix_type": "prompt",
+                    "confidence": "high",
+                }
+            ]
+        }
         return r
 
     def fake_post(url, **kw):
@@ -361,6 +385,4 @@ def test_fix_commands_hit_api_v1_detections(tmp_path, monkeypatch):
     assert r1.exit_code == 0, r1.output
     assert r2.exit_code == 0, r2.output
     assert urls["get"][0] == "http://localhost:8000/api/v1/detections/DET1/fixes"
-    assert urls["post"][-1] == (
-        "http://localhost:8000/api/v1/detections/DET1/fixes/FIX1/apply"
-    )
+    assert urls["post"][-1] == ("http://localhost:8000/api/v1/detections/DET1/fixes/FIX1/apply")

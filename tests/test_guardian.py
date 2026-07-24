@@ -1,8 +1,8 @@
 """Tests for pisama_claude_code.guardian module."""
 
-import pytest
 import json
-from pathlib import Path
+
+import pytest
 
 from pisama_claude_code.guardian import Guardian, GuardianConfig, GuardianResult
 

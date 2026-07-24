@@ -20,6 +20,7 @@ from typing import Any, Dict, List, Optional, Set
 
 from .lite_config import LiteConfig
 from .lite_storage import LiteDetectionRecord, LiteStorage
+from .private_files import ensure_private_dir
 
 logger = logging.getLogger(__name__)
 
@@ -146,7 +147,7 @@ class LiteRunner:
 
     def __init__(self, config: Optional[LiteConfig] = None):
         self.config = config or LiteConfig.load_or_default()
-        self.config.traces_dir.mkdir(parents=True, exist_ok=True)
+        ensure_private_dir(self.config.traces_dir)
         self.storage = LiteStorage(self.config.db_path)
 
     def _detector_enabled(self, name: str) -> bool:
@@ -208,9 +209,7 @@ class LiteRunner:
 
         return self.analyze_data(entries, session_id=session_id or str(trace_path.stem))
 
-    def analyze_data(
-        self, entries: List[Dict[str, Any]], session_id: str = ""
-    ) -> Dict[str, Any]:
+    def analyze_data(self, entries: List[Dict[str, Any]], session_id: str = "") -> Dict[str, Any]:
         """Run detectors on in-memory data.
 
         Args:
@@ -245,7 +244,8 @@ class LiteRunner:
         # Drop positives below the configured severity floor (negatives are kept
         # so the dashboard can still show coverage)
         all_detections = [
-            d for d in all_detections
+            d
+            for d in all_detections
             if not d.detected or d.severity >= self.config.severity_threshold
         ]
 
@@ -391,9 +391,7 @@ class LiteRunner:
         for h, count in hash_counts.items():
             if count >= threshold * 2:
                 # Only flag if not already caught by consecutive detection
-                already_caught = any(
-                    r.details.get("hash") == h for r in records
-                )
+                already_caught = any(r.details.get("hash") == h for r in records)
                 if already_caught:
                     continue
 

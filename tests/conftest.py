@@ -1,11 +1,10 @@
 """Pytest fixtures for pisama-claude-code tests."""
 
-import pytest
 import tempfile
 from pathlib import Path
-from datetime import datetime, timezone
 
-from pisama_core.traces import Span, SpanKind, SpanStatus, Platform
+import pytest
+from pisama_core.traces import Platform, Span, SpanKind
 
 
 @pytest.fixture

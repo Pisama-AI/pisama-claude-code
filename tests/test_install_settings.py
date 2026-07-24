@@ -35,7 +35,7 @@ def test_update_settings_writes_correct_shape(tmp_path):
     inner = post["hooks"][0]
     assert inner["type"] == "command"
     assert "pisama-post.sh" in inner["command"]
-    assert inner["timeout"] == 10          # seconds, not ms
+    assert inner["timeout"] == 10  # seconds, not ms
     assert inner["async"] is True
 
     stop_inner = hooks["Stop"][0]["hooks"][0]
@@ -61,17 +61,23 @@ def test_update_settings_migrates_stale_broken_entries(tmp_path):
     hooks_dir = claude_dir / "hooks"
     hooks_dir.mkdir(parents=True)
     # Simulate the pre-fix broken install: wrong event names + flat shape.
-    (claude_dir / "settings.local.json").write_text(json.dumps({
-        "hooks": {
-            "PreToolCall": [{"command": "~/.claude/hooks/pisama-pre.sh", "timeout": 2000}],
-            "PostToolCall": [{"command": "~/.claude/hooks/pisama-post.sh", "timeout": 2000}],
-        }
-    }))
+    (claude_dir / "settings.local.json").write_text(
+        json.dumps(
+            {
+                "hooks": {
+                    "PreToolCall": [{"command": "~/.claude/hooks/pisama-pre.sh", "timeout": 2000}],
+                    "PostToolCall": [
+                        {"command": "~/.claude/hooks/pisama-post.sh", "timeout": 2000}
+                    ],
+                }
+            }
+        )
+    )
 
     install._update_settings(claude_dir, hooks_dir)
 
     hooks = _settings(claude_dir)["hooks"]
-    assert "PreToolCall" not in hooks      # stale pisama-only group stripped
+    assert "PreToolCall" not in hooks  # stale pisama-only group stripped
     assert "PostToolCall" not in hooks
     assert "PostToolUse" in hooks and "Stop" in hooks
 
@@ -80,20 +86,27 @@ def test_update_settings_preserves_foreign_hooks(tmp_path):
     claude_dir = tmp_path / ".claude"
     hooks_dir = claude_dir / "hooks"
     hooks_dir.mkdir(parents=True)
-    (claude_dir / "settings.local.json").write_text(json.dumps({
-        "hooks": {
-            "PostToolUse": [
-                {"matcher": "Bash", "hooks": [{"type": "command", "command": "other-tool.sh"}]}
-            ],
-        }
-    }))
+    (claude_dir / "settings.local.json").write_text(
+        json.dumps(
+            {
+                "hooks": {
+                    "PostToolUse": [
+                        {
+                            "matcher": "Bash",
+                            "hooks": [{"type": "command", "command": "other-tool.sh"}],
+                        }
+                    ],
+                }
+            }
+        )
+    )
 
     install._update_settings(claude_dir, hooks_dir)
 
     post = _settings(claude_dir)["hooks"]["PostToolUse"]
     cmds = [h["command"] for g in post for h in g.get("hooks", [])]
-    assert "other-tool.sh" in cmds                      # foreign hook untouched
-    assert any("pisama-post.sh" in c for c in cmds)     # pisama hook added
+    assert "other-tool.sh" in cmds  # foreign hook untouched
+    assert any("pisama-post.sh" in c for c in cmds)  # pisama hook added
 
 
 @_unix_only

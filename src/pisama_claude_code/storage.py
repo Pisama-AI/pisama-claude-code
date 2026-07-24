@@ -11,6 +11,12 @@ from typing import Optional
 
 from pisama_core.traces import Platform, Span, SpanKind, SpanStatus
 
+from pisama_claude_code.private_files import (
+    append_private_text,
+    ensure_private_dir,
+    make_private,
+)
+
 
 class TraceStorage:
     """Local storage for Claude Code traces.
@@ -25,7 +31,7 @@ class TraceStorage:
         self.db_path = traces_dir / "pisama.db"
 
         # Ensure directory exists
-        self.traces_dir.mkdir(parents=True, exist_ok=True)
+        ensure_private_dir(self.traces_dir)
 
         # Initialize database
         self._init_db()
@@ -35,9 +41,7 @@ class TraceStorage:
         conn = sqlite3.connect(str(self.db_path))
 
         # Check if table exists with old schema
-        cursor = conn.execute(
-            "SELECT name FROM sqlite_master WHERE type='table' AND name='traces'"
-        )
+        cursor = conn.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='traces'")
         table_exists = cursor.fetchone() is not None
 
         if table_exists:
@@ -103,6 +107,7 @@ class TraceStorage:
 
         conn.commit()
         conn.close()
+        make_private(self.db_path)
 
     def store(self, span: Span, raw_data: Optional[dict] = None) -> None:
         """Store a span to database and JSONL.
@@ -139,8 +144,7 @@ class TraceStorage:
             "raw": raw_data,
         }
 
-        with open(jsonl_path, "a") as f:
-            f.write(json.dumps(record) + "\n")
+        append_private_text(jsonl_path, json.dumps(record) + "\n")
 
     def _write_db(self, span: Span) -> None:
         """Write span to SQLite database."""
@@ -158,34 +162,39 @@ class TraceStorage:
             hook_type = span.attributes.get("hook_type", "unknown")
             working_dir = span.attributes.get("working_dir", "")
 
-            conn.execute("""
+            conn.execute(
+                """
                 INSERT OR REPLACE INTO traces (
                     span_id, trace_id, parent_id, session_id, timestamp,
                     hook_type, tool_name, kind, status, tool_input,
                     tool_output, attributes, duration_ms, error, working_dir
                 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """, (
-                span.span_id,
-                span.trace_id,
-                span.parent_id,
-                session_id,
-                span.start_time.isoformat(),
-                hook_type,
-                span.name,
-                span.kind.value,
-                span.status.value,
-                json.dumps(span.input_data) if span.input_data else None,
-                json.dumps(span.output_data) if span.output_data else None,
-                json.dumps(span.attributes),
-                duration_ms,
-                span.error_message,
-                working_dir,
-            ))
+            """,
+                (
+                    span.span_id,
+                    span.trace_id,
+                    span.parent_id,
+                    session_id,
+                    span.start_time.isoformat(),
+                    hook_type,
+                    span.name,
+                    span.kind.value,
+                    span.status.value,
+                    json.dumps(span.input_data) if span.input_data else None,
+                    json.dumps(span.output_data) if span.output_data else None,
+                    json.dumps(span.attributes),
+                    duration_ms,
+                    span.error_message,
+                    working_dir,
+                ),
+            )
             conn.commit()
             conn.close()
+            make_private(self.db_path)
         except Exception as e:
             # Log but don't fail
             import sys
+
             print(f"PISAMA DB error: {e}", file=sys.stderr)
 
     def get_recent(self, limit: int = 10, session_id: Optional[str] = None) -> list[Span]:
@@ -203,18 +212,24 @@ class TraceStorage:
             conn.row_factory = sqlite3.Row
 
             if session_id:
-                cursor = conn.execute("""
+                cursor = conn.execute(
+                    """
                     SELECT * FROM traces
                     WHERE session_id = ?
                     ORDER BY created_at DESC
                     LIMIT ?
-                """, (session_id, limit))
+                """,
+                    (session_id, limit),
+                )
             else:
-                cursor = conn.execute("""
+                cursor = conn.execute(
+                    """
                     SELECT * FROM traces
                     ORDER BY created_at DESC
                     LIMIT ?
-                """, (limit,))
+                """,
+                    (limit,),
+                )
 
             rows = cursor.fetchall()
             conn.close()
@@ -237,18 +252,24 @@ class TraceStorage:
             conn = sqlite3.connect(str(self.db_path))
 
             if session_id:
-                cursor = conn.execute("""
+                cursor = conn.execute(
+                    """
                     SELECT tool_name FROM traces
                     WHERE session_id = ?
                     ORDER BY created_at DESC
                     LIMIT ?
-                """, (session_id, limit))
+                """,
+                    (session_id, limit),
+                )
             else:
-                cursor = conn.execute("""
+                cursor = conn.execute(
+                    """
                     SELECT tool_name FROM traces
                     ORDER BY created_at DESC
                     LIMIT ?
-                """, (limit,))
+                """,
+                    (limit,),
+                )
 
             rows = cursor.fetchall()
             conn.close()
@@ -308,10 +329,7 @@ class TraceStorage:
         """
         try:
             conn = sqlite3.connect(str(self.db_path))
-            cursor = conn.execute(
-                "DELETE FROM traces WHERE session_id = ?",
-                (session_id,)
-            )
+            cursor = conn.execute("DELETE FROM traces WHERE session_id = ?", (session_id,))
             count = cursor.rowcount
             conn.commit()
             conn.close()

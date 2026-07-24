@@ -7,9 +7,8 @@ import pytest
 
 from pisama_claude_code import proxy
 
-
 SSE = (
-    b'event: message_start\n'
+    b"event: message_start\n"
     b'data: {"type":"message_start","message":{"model":"claude-opus-4-8",'
     b'"usage":{"input_tokens":12,"cache_read_input_tokens":9000}}}\n\n'
     b'data: {"type":"content_block_start","index":0,"content_block":{"type":"thinking","thinking":""}}\n\n'
@@ -21,11 +20,12 @@ SSE = (
     b'data: {"type":"content_block_delta","index":2,"delta":{"type":"input_json_delta","partial_json":"{\\"command\\":"}}\n\n'
     b'data: {"type":"content_block_delta","index":2,"delta":{"type":"input_json_delta","partial_json":" \\"ls\\"}"}}\n\n'
     b'data: {"type":"message_delta","delta":{"stop_reason":"tool_use"},"usage":{"output_tokens":57}}\n\n'
-    b'data: [DONE]\n\n'
+    b"data: [DONE]\n\n"
 )
 
 
 # --------------------------- emit (real-time) ----------------------------- #
+
 
 def test_emit_proxy_record_emits_single_span(monkeypatch):
     """The proxy forwards just THIS call's span via emit_span, not a whole-
@@ -70,9 +70,10 @@ def test_emit_proxy_record_noops_when_not_connected(monkeypatch):
 
 # --------------------------- pure parser tests ---------------------------- #
 
+
 def test_reassemble_sse_recovers_reasoning_and_output():
     s = proxy.reassemble_sse(SSE)
-    assert s["reasoning"] == "Let me reason about this."   # the whole point
+    assert s["reasoning"] == "Let me reason about this."  # the whole point
     assert s["output"] == "The answer is 42."
     assert s["tool_calls"] == [{"name": "Bash", "input": {"command": "ls"}, "id": "tu_1"}]
     assert s["usage"]["input_tokens"] == 12
@@ -82,34 +83,68 @@ def test_reassemble_sse_recovers_reasoning_and_output():
     assert s["stop_reason"] == "tool_use"
 
 
+def test_reassemble_sse_preserves_tool_input_delivered_in_start_event():
+    stream = (
+        b'data: {"type":"content_block_start","index":0,"content_block":'
+        b'{"type":"tool_use","id":"tu_direct","name":"Read",'
+        b'"input":{"file_path":"/workspace/README.md"}}}\n\n'
+        b"data: [DONE]\n\n"
+    )
+    summary = proxy.reassemble_sse(stream)
+    assert summary["tool_calls"] == [
+        {
+            "name": "Read",
+            "input": {"file_path": "/workspace/README.md"},
+            "id": "tu_direct",
+        }
+    ]
+
+
+def test_reassemble_sse_ignores_malformed_event_shapes():
+    summary = proxy.reassemble_sse(
+        b"data: []\n\n"
+        b'data: {"type":"content_block_delta","index":null,"delta":'
+        b'{"type":"text_delta","text":null}}\n\n'
+    )
+    assert summary["output"] is None
+    assert summary["tool_calls"] is None
+
+
 def test_parse_request_finds_user_input_skipping_tool_results():
-    body = json.dumps({
-        "model": "claude-x",
-        "system": [{"type": "text", "text": "You are helpful."}],
-        "messages": [
-            {"role": "user", "content": "hi there"},
-            {"role": "assistant", "content": [{"type": "text", "text": "hello"}]},
-            {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "x", "content": "ok"}]},
-        ],
-        "stream": True,
-    }).encode()
+    body = json.dumps(
+        {
+            "model": "claude-x",
+            "system": [{"type": "text", "text": "You are helpful."}],
+            "messages": [
+                {"role": "user", "content": "hi there"},
+                {"role": "assistant", "content": [{"type": "text", "text": "hello"}]},
+                {
+                    "role": "user",
+                    "content": [{"type": "tool_result", "tool_use_id": "x", "content": "ok"}],
+                },
+            ],
+            "stream": True,
+        }
+    ).encode()
     p = proxy.parse_request(body)
-    assert p["user_input"] == "hi there"      # skips the tool_result-only last turn
+    assert p["user_input"] == "hi there"  # skips the tool_result-only last turn
     assert p["system"] == "You are helpful."
     assert p["stream"] is True
 
 
 def test_parse_json_response_non_streaming():
-    body = json.dumps({
-        "model": "m",
-        "content": [
-            {"type": "thinking", "thinking": "hmm"},
-            {"type": "text", "text": "done"},
-            {"type": "tool_use", "id": "t", "name": "Read", "input": {"file_path": "a"}},
-        ],
-        "stop_reason": "end_turn",
-        "usage": {"input_tokens": 3, "output_tokens": 4},
-    }).encode()
+    body = json.dumps(
+        {
+            "model": "m",
+            "content": [
+                {"type": "thinking", "thinking": "hmm"},
+                {"type": "text", "text": "done"},
+                {"type": "tool_use", "id": "t", "name": "Read", "input": {"file_path": "a"}},
+            ],
+            "stop_reason": "end_turn",
+            "usage": {"input_tokens": 3, "output_tokens": 4},
+        }
+    ).encode()
     s = proxy.parse_json_response(body)
     assert s["reasoning"] == "hmm"
     assert s["output"] == "done"
@@ -118,20 +153,34 @@ def test_parse_json_response_non_streaming():
 
 def test_conversation_id_stable_across_turns():
     base = {"system": "S", "messages": [{"role": "user", "content": "first"}]}
-    grown = {"system": "S", "messages": [
-        {"role": "user", "content": "first"},
-        {"role": "assistant", "content": "..."},
-        {"role": "user", "content": "second"},
-    ]}
+    grown = {
+        "system": "S",
+        "messages": [
+            {"role": "user", "content": "first"},
+            {"role": "assistant", "content": "..."},
+            {"role": "user", "content": "second"},
+        ],
+    }
     assert proxy.conversation_id(base) == proxy.conversation_id(grown)
 
 
 def test_build_record_shape():
-    parsed = proxy.parse_request(json.dumps(
-        {"model": "claude-opus-4-8", "system": "s", "messages": [{"role": "user", "content": "q"}]}
-    ).encode())
-    rec = proxy.build_record(parsed, proxy.reassemble_sse(SSE),
-                             timestamp="2026-06-14T00:00:00+00:00", status=200, duration_ms=123)
+    parsed = proxy.parse_request(
+        json.dumps(
+            {
+                "model": "claude-opus-4-8",
+                "system": "s",
+                "messages": [{"role": "user", "content": "q"}],
+            }
+        ).encode()
+    )
+    rec = proxy.build_record(
+        parsed,
+        proxy.reassemble_sse(SSE),
+        timestamp="2026-06-14T00:00:00+00:00",
+        status=200,
+        duration_ms=123,
+    )
     assert rec["reasoning"] == "Let me reason about this."
     assert rec["user_input"] == "q"
     assert rec["conversation_id"].startswith("cc-proxy-")
@@ -140,6 +189,7 @@ def test_build_record_shape():
 
 # ----------------------- always-on wiring (pure) -------------------------- #
 
+
 def test_set_and_unset_base_url(tmp_path):
     sp = tmp_path / "settings.json"
     sp.write_text(json.dumps({"hooks": {"PostToolUse": []}}))  # preserve other keys
@@ -147,7 +197,7 @@ def test_set_and_unset_base_url(tmp_path):
     assert url == "http://127.0.0.1:8788"
     data = json.loads(sp.read_text())
     assert data["env"]["ANTHROPIC_BASE_URL"] == url
-    assert "hooks" in data                      # untouched
+    assert "hooks" in data  # untouched
     assert proxy.configured_base_url(settings_path=sp) == url
     assert proxy.unset_base_url(settings_path=sp) is True
     assert "ANTHROPIC_BASE_URL" not in json.loads(sp.read_text()).get("env", {})
@@ -161,7 +211,7 @@ def test_shell_export_add_remove_idempotent(tmp_path):
     txt = prof.read_text()
     assert "export ANTHROPIC_BASE_URL=http://127.0.0.1:8788" in txt
     assert proxy.SHELL_MARKER_BEGIN in txt
-    assert "export PATH=/usr/bin" in txt              # pre-existing content preserved
+    assert "export PATH=/usr/bin" in txt  # pre-existing content preserved
 
     # re-install updates value without duplicating the block
     proxy.add_shell_export(8799, profile=prof)
@@ -172,7 +222,7 @@ def test_shell_export_add_remove_idempotent(tmp_path):
     assert proxy.remove_shell_export(profile=prof) is True
     txt = prof.read_text()
     assert proxy.SHELL_MARKER_BEGIN not in txt
-    assert "export PATH=/usr/bin" in txt              # still preserved
+    assert "export PATH=/usr/bin" in txt  # still preserved
     assert proxy.remove_shell_export(profile=prof) is False  # nothing left to remove
 
 
@@ -185,9 +235,12 @@ def test_launchd_plist_has_keepalive_and_serve_args():
 
 # --------------------------- CLI smoke tests ------------------------------ #
 
+
 def test_cli_proxy_install_print_only():
     from click.testing import CliRunner
+
     from pisama_claude_code.cli import main
+
     r = CliRunner().invoke(main, ["proxy", "install"])
     assert r.exit_code == 0
     assert "Opt-in" in r.output and "always-on" in r.output.lower()
@@ -195,7 +248,9 @@ def test_cli_proxy_install_print_only():
 
 def test_cli_proxy_status_runs(monkeypatch, tmp_path):
     from click.testing import CliRunner
+
     from pisama_claude_code.cli import main
+
     monkeypatch.setattr(proxy, "PROXY_DIR", tmp_path)
     monkeypatch.setattr(proxy, "SETTINGS_PATH", tmp_path / "settings.json")
     monkeypatch.setattr(proxy, "SHELL_PROFILE", tmp_path / ".zshrc")  # never read real profile
@@ -206,7 +261,9 @@ def test_cli_proxy_status_runs(monkeypatch, tmp_path):
 
 def test_cli_proxy_uninstall_hermetic(monkeypatch, tmp_path):
     from click.testing import CliRunner
+
     from pisama_claude_code.cli import main
+
     # Fully sandbox every path uninstall touches - must NOT mutate real ~/.zshrc etc.
     monkeypatch.setattr(proxy, "SETTINGS_PATH", tmp_path / "settings.json")
     monkeypatch.setattr(proxy, "LAUNCHD_PLIST", tmp_path / "agent.plist")
@@ -217,6 +274,7 @@ def test_cli_proxy_uninstall_hermetic(monkeypatch, tmp_path):
 
 
 # -------------------- integration: real streaming proxy ------------------- #
+
 
 @pytest.mark.asyncio
 async def test_proxy_passthrough_and_capture(tmp_path, monkeypatch):
@@ -238,7 +296,7 @@ async def test_proxy_passthrough_and_capture(tmp_path, monkeypatch):
         await resp.prepare(request)
         # stream in two chunks to exercise the tee
         await resp.write(SSE[: len(SSE) // 2])
-        await resp.write(SSE[len(SSE) // 2:])
+        await resp.write(SSE[len(SSE) // 2 :])
         await resp.write_eof()
         return resp
 
@@ -253,12 +311,14 @@ async def test_proxy_passthrough_and_capture(tmp_path, monkeypatch):
     await proxy_server.start_server()
     purl = f"http://127.0.0.1:{proxy_server.port}"
 
-    req_body = json.dumps({
-        "model": "claude-opus-4-8",
-        "system": "sys",
-        "messages": [{"role": "user", "content": "hello"}],
-        "stream": True,
-    }).encode()
+    req_body = json.dumps(
+        {
+            "model": "claude-opus-4-8",
+            "system": "sys",
+            "messages": [{"role": "user", "content": "hello"}],
+            "stream": True,
+        }
+    ).encode()
 
     try:
         async with aiohttp.ClientSession() as s:
@@ -266,13 +326,16 @@ async def test_proxy_passthrough_and_capture(tmp_path, monkeypatch):
             async with s.get(purl + "/__pisama/health") as h:
                 assert h.status == 200 and (await h.json())["ok"] is True
             # real request flows through to the mock upstream
-            async with s.post(purl + "/v1/messages", data=req_body,
-                              headers={"content-type": "application/json", "x-api-key": "sk-test"}) as r:
+            async with s.post(
+                purl + "/v1/messages",
+                data=req_body,
+                headers={"content-type": "application/json", "x-api-key": "sk-test"},
+            ) as r:
                 got = await r.read()
 
-        assert got == SSE                                   # byte-for-byte passthrough
+        assert got == SSE  # byte-for-byte passthrough
         assert seen_upstream["path"].endswith("/v1/messages")
-        assert seen_upstream["api_key"] == "sk-test"        # auth forwarded untouched
+        assert seen_upstream["api_key"] == "sk-test"  # auth forwarded untouched
 
         # capture happens just after write_eof; poll briefly for the file
         rec = None

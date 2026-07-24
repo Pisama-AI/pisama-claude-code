@@ -2,31 +2,34 @@
 
 import re
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone
 from enum import Enum
 from typing import Any, Dict, List, Optional
 
 
 class TraceType(Enum):
     """Types of traces captured from Claude Code."""
-    TOOL = "tool"           # Regular tool calls (Bash, Read, Edit, etc.)
-    SKILL = "skill"         # Skill activations (SKILL.md reads)
-    TASK = "task"           # Task/subagent invocations
-    MCP = "mcp"             # MCP server calls
-    HOOK = "hook"           # Hook-triggered operations
+
+    TOOL = "tool"  # Regular tool calls (Bash, Read, Edit, etc.)
+    SKILL = "skill"  # Skill activations (SKILL.md reads)
+    TASK = "task"  # Task/subagent invocations
+    MCP = "mcp"  # MCP server calls
+    HOOK = "hook"  # Hook-triggered operations
 
 
 class SkillSource(Enum):
     """Where the skill was loaded from."""
-    PROJECT = "project"     # .claude/skills/ in repo
-    PERSONAL = "personal"   # ~/.claude/skills/
-    PLUGIN = "plugin"       # Installed plugin
+
+    PROJECT = "project"  # .claude/skills/ in repo
+    PERSONAL = "personal"  # ~/.claude/skills/
+    PLUGIN = "plugin"  # Installed plugin
     ENTERPRISE = "enterprise"
 
 
 @dataclass
 class EnhancedTrace:
     """Enhanced trace with skill differentiation."""
+
     trace_id: str
     session_id: str
     timestamp: datetime
@@ -54,8 +57,10 @@ class EnhancedTrace:
 
 def classify_trace(raw_trace: Dict[str, Any]) -> EnhancedTrace:
     """Classify a raw trace into an enhanced trace with proper type."""
-    tool_name = raw_trace.get("tool_name", "unknown")
+    tool_name = str(raw_trace.get("tool_name") or "unknown")
     tool_input = raw_trace.get("tool_input", {})
+    raw_metadata = raw_trace.get("metadata")
+    metadata: Dict[str, Any] = raw_metadata if isinstance(raw_metadata, dict) else {}
 
     # Default classification
     trace_type = TraceType.TOOL
@@ -65,23 +70,31 @@ def classify_trace(raw_trace: Dict[str, Any]) -> EnhancedTrace:
     # Detect skill activation via SKILL.md reads
     if tool_name == "Read":
         file_path = tool_input.get("file_path", "") if isinstance(tool_input, dict) else ""
-        if "SKILL.md" in file_path or "/skills/" in file_path:
+        normalized_path = str(file_path).replace("\\", "/")
+        if "SKILL.md" in normalized_path or "/skills/" in normalized_path:
             trace_type = TraceType.SKILL
             # Extract skill name from path
-            match = re.search(r"/skills/([^/]+)/", file_path)
+            match = re.search(r"(?:^|/)skills/([^/]+)/", normalized_path)
             skill_name = match.group(1) if match else "unknown"
             # Determine source
-            if "/.claude/skills/" in file_path and "/Users/" in file_path:
-                skill_source = SkillSource.PERSONAL
-            elif ".claude/skills/" in file_path:
+            working_dir = str(raw_trace.get("working_dir") or "").replace("\\", "/").rstrip("/")
+            project_skills = f"{working_dir}/.claude/skills/" if working_dir else ".claude/skills/"
+            absolute_path = normalized_path.startswith("/") or bool(
+                re.match(r"^[A-Za-z]:/", normalized_path)
+            )
+            if not absolute_path or normalized_path.startswith(project_skills):
                 skill_source = SkillSource.PROJECT
+            elif "/.claude/skills/" in normalized_path:
+                skill_source = SkillSource.PERSONAL
             else:
                 skill_source = SkillSource.PLUGIN
 
     # Detect explicit Skill tool invocation
     elif tool_name == "Skill":
         trace_type = TraceType.SKILL
-        skill_name = tool_input.get("skill", "unknown") if isinstance(tool_input, dict) else "unknown"
+        skill_name = (
+            tool_input.get("skill", "unknown") if isinstance(tool_input, dict) else "unknown"
+        )
 
     # Detect Task/subagent invocation
     elif tool_name == "Task":
@@ -94,7 +107,7 @@ def classify_trace(raw_trace: Dict[str, Any]) -> EnhancedTrace:
     return EnhancedTrace(
         trace_id=raw_trace.get("trace_id", ""),
         session_id=raw_trace.get("session_id", "unknown"),
-        timestamp=datetime.fromisoformat(raw_trace.get("timestamp", datetime.now().isoformat())),
+        timestamp=_parse_trace_timestamp(raw_trace.get("timestamp")),
         trace_type=trace_type,
         tool_name=tool_name,
         tool_input=tool_input,
@@ -103,8 +116,20 @@ def classify_trace(raw_trace: Dict[str, Any]) -> EnhancedTrace:
         skill_source=skill_source,
         working_dir=raw_trace.get("working_dir", ""),
         hook_type=raw_trace.get("hook_type", ""),
-        metadata=raw_trace.get("metadata", {}),
+        metadata=metadata,
     )
+
+
+def _parse_trace_timestamp(value: Any) -> datetime:
+    """Parse ISO timestamps across every supported Python version."""
+    if isinstance(value, datetime):
+        return value
+    if isinstance(value, str):
+        try:
+            return datetime.fromisoformat(value.replace("Z", "+00:00"))
+        except ValueError:
+            pass
+    return datetime.now(timezone.utc)
 
 
 def analyze_skill_usage(traces: List[Dict[str, Any]]) -> Dict[str, Any]:

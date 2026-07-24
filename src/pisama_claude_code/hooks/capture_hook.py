@@ -20,16 +20,22 @@ import sys
 from datetime import date
 from typing import Any
 
+from pisama_claude_code.private_files import (
+    append_private_text,
+    ensure_private_dir,
+    make_private,
+)
+
 # PII Tokenization configuration
 TOKENIZATION_ENABLED = os.environ.get("PISAMA_TOKENIZATION", "1") == "1"
 # Fields to tokenize - now includes input, reasoning, output
 TOKENIZATION_FIELDS = [
     "tool_input",
     "tool_output",
-    "user_input",      # User's prompt/message
-    "reasoning",       # Extended thinking content
-    "ai_output",       # Assistant's text response
-    "ai_response",     # Legacy field
+    "user_input",  # User's prompt/message
+    "reasoning",  # Extended thinking content
+    "ai_output",  # Assistant's text response
+    "ai_response",  # Legacy field
 ]
 
 # Anthropic API list pricing per 1M tokens, reviewed 2026-07-23.
@@ -82,10 +88,10 @@ def calculate_cost(model: str, usage: dict) -> float:
     cache_create = usage.get("cache_creation_input_tokens", 0)
 
     cost = (
-        (input_tokens / 1_000_000) * pricing["input"] +
-        (output_tokens / 1_000_000) * pricing["output"] +
-        (cache_read / 1_000_000) * pricing["cache_read"] +
-        (cache_create / 1_000_000) * pricing["cache_write"]
+        (input_tokens / 1_000_000) * pricing["input"]
+        + (output_tokens / 1_000_000) * pricing["output"]
+        + (cache_read / 1_000_000) * pricing["cache_read"]
+        + (cache_create / 1_000_000) * pricing["cache_write"]
     )
     return round(cost, 6)
 
@@ -100,6 +106,7 @@ def get_tokenizer(session_id: str) -> Any:
 
     try:
         from pisama_core.tokenization import Tokenizer
+
         return Tokenizer(
             session_id=session_id,
             enabled=True,
@@ -194,11 +201,13 @@ def extract_content_parts(content_blocks: list) -> dict:
 
         elif block_type == "tool_use":
             # Tool call
-            tool_calls.append({
-                "id": block.get("id"),
-                "name": block.get("name"),
-                "input": block.get("input"),
-            })
+            tool_calls.append(
+                {
+                    "id": block.get("id"),
+                    "name": block.get("name"),
+                    "input": block.get("input"),
+                }
+            )
 
     return {
         "reasoning": {
@@ -253,6 +262,7 @@ def get_last_user_message(transcript_path: str) -> dict:
     """Read transcript and get the last real user text message (input)."""
     try:
         from pathlib import Path
+
         transcript = Path(transcript_path)
         if not transcript.exists():
             return {}
@@ -289,6 +299,7 @@ def get_last_assistant_message(transcript_path: str) -> dict:
     """
     try:
         from pathlib import Path
+
         transcript = Path(transcript_path)
         if not transcript.exists():
             return {}
@@ -416,7 +427,7 @@ def _capture(hook_data: dict, hook_type: str) -> None:
     db_path = traces_dir / "pisama.db"
 
     # Ensure directory exists
-    traces_dir.mkdir(parents=True, exist_ok=True)
+    ensure_private_dir(traces_dir)
 
     timestamp = datetime.now(timezone.utc).isoformat()
     session_id = hook_data.get("session_id", os.environ.get("CLAUDE_SESSION_ID", "unknown"))
@@ -492,17 +503,16 @@ def _capture(hook_data: dict, hook_type: str) -> None:
         "ai_output": ai_output,
         # Legacy field (truncated for backward compat)
         "ai_response": ai_response,
-        "raw": hook_data,
     }
 
     # Tokenize PII before storage (PostToolUse only to avoid double-tokenization)
     if hook_type in ("post", "PostToolUse"):
         trace = tokenize_trace_data(trace, session_id)
 
-    with open(jsonl_path, "a") as f:
-        f.write(json.dumps(trace) + "\n")
+    append_private_text(jsonl_path, json.dumps(trace) + "\n")
 
     # Write to SQLite
+    conn = None
     try:
         conn = sqlite3.connect(str(db_path))
         # Updated schema with input/reasoning/output columns
@@ -549,35 +559,42 @@ def _capture(hook_data: dict, hook_type: str) -> None:
                 pass  # Column already exists
 
         # Use tokenized values from trace dict
-        conn.execute("""
+        conn.execute(
+            """
             INSERT INTO traces (
                 session_id, timestamp, hook_type, tool_name, tool_input, tool_output,
                 working_dir, model, input_tokens, output_tokens, cache_read_tokens, cost_usd,
                 user_input, reasoning, ai_output, ai_response
             )
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        """, (
-            session_id,
-            timestamp,
-            hook_type,
-            tool_name,
-            json.dumps(trace.get("tool_input")) if trace.get("tool_input") else None,
-            json.dumps(trace.get("tool_output")) if trace.get("tool_output") else None,
-            working_dir,
-            model,
-            usage.get("input_tokens"),
-            usage.get("output_tokens"),
-            usage.get("cache_read_input_tokens"),
-            cost,
-            trace.get("user_input"),
-            trace.get("reasoning"),
-            trace.get("ai_output"),
-            trace.get("ai_response"),
-        ))
+        """,
+            (
+                session_id,
+                timestamp,
+                hook_type,
+                tool_name,
+                json.dumps(trace.get("tool_input")) if trace.get("tool_input") else None,
+                json.dumps(trace.get("tool_output")) if trace.get("tool_output") else None,
+                working_dir,
+                model,
+                usage.get("input_tokens"),
+                usage.get("output_tokens"),
+                usage.get("cache_read_input_tokens"),
+                cost,
+                trace.get("user_input"),
+                trace.get("reasoning"),
+                trace.get("ai_output"),
+                trace.get("ai_response"),
+            ),
+        )
         conn.commit()
-        conn.close()
     except Exception:
         pass
+    finally:
+        if conn is not None:
+            conn.close()
+        if db_path.exists():
+            make_private(db_path)
 
     # Real-time forward: stream THIS event as a single appended span so a long
     # session never becomes one giant batch transaction. Opt-in (auto_sync) and

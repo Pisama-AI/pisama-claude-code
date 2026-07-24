@@ -32,6 +32,9 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+from pisama_claude_code import __version__
+from pisama_claude_code.private_files import append_private_text, ensure_private_dir
+
 aiohttp: Any
 web: Any
 try:
@@ -48,8 +51,16 @@ PROXY_DIR = Path.home() / ".claude" / "pisama" / "proxy"
 
 # Hop-by-hop headers that must not be forwarded verbatim.
 _HOP_BY_HOP = {
-    "connection", "keep-alive", "proxy-authenticate", "proxy-authorization",
-    "te", "trailers", "transfer-encoding", "upgrade", "host", "content-length",
+    "connection",
+    "keep-alive",
+    "proxy-authenticate",
+    "proxy-authorization",
+    "te",
+    "trailers",
+    "transfer-encoding",
+    "upgrade",
+    "host",
+    "content-length",
 }
 
 
@@ -57,11 +68,14 @@ _HOP_BY_HOP = {
 # Pure parsing helpers (no network; unit-tested)
 # --------------------------------------------------------------------------- #
 
+
 def _system_text(system: Any) -> Optional[str]:
     if isinstance(system, str):
         return system
     if isinstance(system, list):
-        parts = [b.get("text", "") for b in system if isinstance(b, dict) and b.get("type") == "text"]
+        parts = [
+            b.get("text", "") for b in system if isinstance(b, dict) and b.get("type") == "text"
+        ]
         return "\n".join(p for p in parts if p) or None
     return None
 
@@ -87,7 +101,9 @@ def parse_request(body: bytes) -> Dict[str, Any]:
             break
         if isinstance(c, list):
             has_tool_result = any(isinstance(b, dict) and b.get("type") == "tool_result" for b in c)
-            texts = [b.get("text", "") for b in c if isinstance(b, dict) and b.get("type") == "text"]
+            texts = [
+                b.get("text", "") for b in c if isinstance(b, dict) and b.get("type") == "text"
+            ]
             texts = [t for t in texts if t]
             if texts:
                 user_input = "\n".join(texts)
@@ -110,87 +126,145 @@ def reassemble_sse(raw: bytes) -> Dict[str, Any]:
     Recovers the reasoning (thinking_delta), output text, tool calls, model and
     token usage from the SSE event stream.
     """
-    text_parts: List[str] = []
-    thinking_parts: List[str] = []
-    tool_calls: List[Dict[str, Any]] = []
-    usage: Dict[str, Any] = {}
-    model: Optional[str] = None
-    stop_reason: Optional[str] = None
-    blocks: Dict[int, Dict[str, Any]] = {}
+    state: Dict[str, Any] = {
+        "blocks": {},
+        "usage": {},
+        "model": None,
+        "stop_reason": None,
+    }
 
     for line in raw.split(b"\n"):
         line = line.strip()
         if not line.startswith(b"data:"):
             continue
-        data = line[len(b"data:"):].strip()
+        data = line[len(b"data:") :].strip()
         if not data or data == b"[DONE]":
             continue
         try:
             ev = json.loads(data)
         except ValueError:
             continue
-        etype = ev.get("type")
+        if isinstance(ev, dict):
+            _apply_sse_event(ev, state)
 
-        if etype == "message_start":
-            msg = ev.get("message", {}) or {}
-            model = msg.get("model") or model
-            if isinstance(msg.get("usage"), dict):
-                usage.update(msg["usage"])
-        elif etype == "content_block_start":
-            idx = ev.get("index")
-            cb = ev.get("content_block", {}) or {}
-            blocks[idx] = {
-                "type": cb.get("type"),
-                "name": cb.get("name"),
-                "id": cb.get("id"),
-                "text": cb.get("text", "") or "",
-                "thinking": cb.get("thinking", "") or "",
-                "json": "",
-            }
-        elif etype == "content_block_delta":
-            idx = ev.get("index")
-            d = ev.get("delta", {}) or {}
-            b = blocks.get(idx)
-            if b is None:
-                b = blocks[idx] = {"type": None, "text": "", "thinking": "", "json": ""}
-            dt = d.get("type")
-            if dt == "text_delta":
-                b["text"] += d.get("text", "")
-                b["type"] = b["type"] or "text"
-            elif dt == "thinking_delta":
-                b["thinking"] += d.get("thinking", "")
-                b["type"] = b["type"] or "thinking"
-            elif dt == "input_json_delta":
-                b["json"] += d.get("partial_json", "")
-                b["type"] = b["type"] or "tool_use"
-        elif etype == "message_delta":
-            d = ev.get("delta", {}) or {}
-            if d.get("stop_reason"):
-                stop_reason = d["stop_reason"]
-            if isinstance(ev.get("usage"), dict):
-                usage.update(ev["usage"])
-
-    for idx in sorted(blocks):
-        b = blocks[idx]
-        if b["type"] == "text" and b["text"]:
-            text_parts.append(b["text"])
-        elif b["type"] == "thinking" and b["thinking"]:
-            thinking_parts.append(b["thinking"])
-        elif b["type"] == "tool_use":
-            try:
-                inp = json.loads(b["json"]) if b["json"] else {}
-            except ValueError:
-                inp = {"_raw": b["json"]}
-            tool_calls.append({"name": b.get("name"), "input": inp, "id": b.get("id")})
-
+    text_parts, thinking_parts, tool_calls = _summarize_sse_blocks(state["blocks"])
     return {
-        "model": model,
+        "model": state["model"],
         "output": "\n\n".join(text_parts) or None,
         "reasoning": "\n\n".join(thinking_parts) or None,
         "tool_calls": tool_calls or None,
-        "usage": usage,
-        "stop_reason": stop_reason,
+        "usage": state["usage"],
+        "stop_reason": state["stop_reason"],
     }
+
+
+def _apply_sse_event(event: Dict[str, Any], state: Dict[str, Any]) -> None:
+    """Apply one decoded Anthropic SSE event to the reassembly state."""
+    event_type = event.get("type")
+    if event_type == "message_start":
+        message = event.get("message")
+        if not isinstance(message, dict):
+            return
+        state["model"] = message.get("model") or state["model"]
+        if isinstance(message.get("usage"), dict):
+            state["usage"].update(message["usage"])
+        return
+
+    if event_type == "message_delta":
+        delta = event.get("delta")
+        if isinstance(delta, dict) and delta.get("stop_reason"):
+            state["stop_reason"] = delta["stop_reason"]
+        if isinstance(event.get("usage"), dict):
+            state["usage"].update(event["usage"])
+        return
+
+    index = event.get("index")
+    if not isinstance(index, int):
+        return
+    blocks: Dict[int, Dict[str, Any]] = state["blocks"]
+
+    if event_type == "content_block_start":
+        content = event.get("content_block")
+        if not isinstance(content, dict):
+            return
+        blocks[index] = {
+            "type": content.get("type"),
+            "name": content.get("name"),
+            "id": content.get("id"),
+            "input": content.get("input"),
+            "text": content.get("text") if isinstance(content.get("text"), str) else "",
+            "thinking": (
+                content.get("thinking") if isinstance(content.get("thinking"), str) else ""
+            ),
+            "json": "",
+        }
+        return
+
+    if event_type != "content_block_delta":
+        return
+    delta = event.get("delta")
+    if not isinstance(delta, dict):
+        return
+    block = blocks.setdefault(
+        index,
+        {
+            "type": None,
+            "name": None,
+            "id": None,
+            "input": None,
+            "text": "",
+            "thinking": "",
+            "json": "",
+        },
+    )
+    delta_type = delta.get("type")
+    if not isinstance(delta_type, str):
+        return
+    field_by_type = {
+        "text_delta": ("text", "text"),
+        "thinking_delta": ("thinking", "thinking"),
+        "input_json_delta": ("json", "partial_json"),
+    }
+    fields = field_by_type.get(delta_type)
+    if fields is None:
+        return
+    target, source = fields
+    value = delta.get(source)
+    if isinstance(value, str):
+        block[target] += value
+    block["type"] = (
+        block["type"]
+        or {
+            "text_delta": "text",
+            "thinking_delta": "thinking",
+            "input_json_delta": "tool_use",
+        }[delta_type]
+    )
+
+
+def _summarize_sse_blocks(
+    blocks: Dict[int, Dict[str, Any]],
+) -> tuple[List[str], List[str], List[Dict[str, Any]]]:
+    """Convert reassembled content blocks into public summary fields."""
+    text_parts: List[str] = []
+    thinking_parts: List[str] = []
+    tool_calls: List[Dict[str, Any]] = []
+    for index in sorted(blocks):
+        block = blocks[index]
+        if block["type"] == "text" and block["text"]:
+            text_parts.append(block["text"])
+        elif block["type"] == "thinking" and block["thinking"]:
+            thinking_parts.append(block["thinking"])
+        elif block["type"] == "tool_use":
+            raw_json = block["json"]
+            try:
+                tool_input = json.loads(raw_json) if raw_json else (block.get("input") or {})
+            except ValueError:
+                tool_input = {"_raw": raw_json}
+            tool_calls.append(
+                {"name": block.get("name"), "input": tool_input, "id": block.get("id")}
+            )
+    return text_parts, thinking_parts, tool_calls
 
 
 def parse_json_response(body: bytes) -> Dict[str, Any]:
@@ -235,13 +309,20 @@ def conversation_id(parsed: Dict[str, Any]) -> str:
     return "cc-proxy-" + hashlib.sha1(key).hexdigest()[:16]
 
 
-def build_record(parsed_req: Dict[str, Any], summary: Dict[str, Any],
-                 *, timestamp: str, status: int, duration_ms: Optional[int]) -> Dict[str, Any]:
+def build_record(
+    parsed_req: Dict[str, Any],
+    summary: Dict[str, Any],
+    *,
+    timestamp: str,
+    status: int,
+    duration_ms: Optional[int],
+) -> Dict[str, Any]:
     """Combine the parsed request + reassembled response into a stored record."""
     usage = summary.get("usage") or {}
     model = summary.get("model") or parsed_req.get("model")
     try:
         from pisama_claude_code.hooks.capture_hook import calculate_cost
+
         cost = calculate_cost(model, usage) if model and usage else 0.0
     except Exception:
         cost = 0.0
@@ -267,16 +348,18 @@ def build_record(parsed_req: Dict[str, Any], summary: Dict[str, Any],
 # Local storage + forwarding
 # --------------------------------------------------------------------------- #
 
+
 def store_record(record: Dict[str, Any], proxy_dir: Optional[Path] = None) -> None:
     proxy_dir = proxy_dir or PROXY_DIR
-    proxy_dir.mkdir(parents=True, exist_ok=True)
+    ensure_private_dir(proxy_dir)
     date_str = record.get("ts", "")[:10] or datetime.now(timezone.utc).strftime("%Y-%m-%d")
     path = proxy_dir / f"calls-{date_str}.jsonl"
-    with open(path, "a") as f:
-        f.write(json.dumps(record) + "\n")
+    append_private_text(path, json.dumps(record) + "\n")
 
 
-def _records_for_conversation(conv_id: str, proxy_dir: Optional[Path] = None, max_files: int = 7) -> List[Dict[str, Any]]:
+def _records_for_conversation(
+    conv_id: str, proxy_dir: Optional[Path] = None, max_files: int = 7
+) -> List[Dict[str, Any]]:
     proxy_dir = proxy_dir or PROXY_DIR
     out: List[Dict[str, Any]] = []
     if not proxy_dir.exists():
@@ -357,7 +440,7 @@ def forward_conversation(conv_id: str, proxy_dir: Optional[Path] = None) -> tupl
 
     payload = {
         "source": "claude-code-proxy",
-        "version": "0.4.3",
+        "version": __version__,
         "uploaded_at": datetime.now(timezone.utc).isoformat(),
         "trace_count": len(traces),
         "traces": traces,
@@ -366,7 +449,8 @@ def forward_conversation(conv_id: str, proxy_dir: Optional[Path] = None) -> tupl
         resp = httpx.post(
             api_url(config, "/traces/claude-code/ingest"),
             headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
-            json=payload, timeout=30,
+            json=payload,
+            timeout=30,
         )
     except Exception as e:  # noqa: BLE001
         return False, f"network error: {e}"
@@ -397,12 +481,22 @@ def emit_proxy_record(rec: Dict[str, Any]) -> tuple:
 # The streaming reverse proxy (aiohttp)
 # --------------------------------------------------------------------------- #
 
+
 def _forward_request_headers(headers) -> Dict[str, str]:
     return {k: v for k, v in headers.items() if k.lower() not in _HOP_BY_HOP}
 
 
-def _capture(parsed_req, body_resp, content_type, *, status, duration_ms, forward,
-             path=None, content_encoding=None):
+def _capture(
+    parsed_req,
+    body_resp,
+    content_type,
+    *,
+    status,
+    duration_ms,
+    forward,
+    path=None,
+    content_encoding=None,
+):
     """Best-effort: reassemble, store, and (optionally) schedule a forward.
 
     Never raises into the request path; callers wrap in try/except too."""
@@ -415,9 +509,11 @@ def _capture(parsed_req, body_resp, content_type, *, status, duration_ms, forwar
     else:
         summary = {}
     record = build_record(
-        parsed_req, summary,
+        parsed_req,
+        summary,
         timestamp=datetime.now(timezone.utc).isoformat(),
-        status=status, duration_ms=duration_ms,
+        status=status,
+        duration_ms=duration_ms,
     )
     record["path"] = path
     if status >= 400:
@@ -439,9 +535,11 @@ def _maybe_decompress(raw: bytes, encoding: Optional[str]) -> bytes:
     try:
         if enc == "gzip":
             import gzip as _gz
+
             return _gz.decompress(raw)
         if enc == "deflate":
             import zlib
+
             try:
                 return zlib.decompress(raw)
             except zlib.error:
@@ -458,8 +556,11 @@ def make_app(upstream: str = DEFAULT_UPSTREAM, forward: bool = True):
 
     async def handler(request: "web.Request") -> "web.StreamResponse":
         import time as _time
+
         if request.path == "/__pisama/health":
-            return web.json_response({"ok": True, "service": "pisama-cc-proxy", "upstream": upstream})
+            return web.json_response(
+                {"ok": True, "service": "pisama-cc-proxy", "upstream": upstream}
+            )
         body = await request.read()
         url = upstream.rstrip("/") + request.rel_url.raw_path_qs
         fwd_headers = _forward_request_headers(request.headers)
@@ -474,21 +575,27 @@ def make_app(upstream: str = DEFAULT_UPSTREAM, forward: bool = True):
         session = request.app[session_key]
         try:
             upstream_resp = await session.request(
-                request.method, url, headers=fwd_headers, data=body or None,
+                request.method,
+                url,
+                headers=fwd_headers,
+                data=body or None,
             )
         except Exception as e:  # noqa: BLE001
             return web.Response(status=502, text=f"pisama proxy upstream error: {e}")
 
-        resp_headers = {k: v for k, v in upstream_resp.headers.items() if k.lower() not in _HOP_BY_HOP}
+        resp_headers = {
+            k: v for k, v in upstream_resp.headers.items() if k.lower() not in _HOP_BY_HOP
+        }
         client_resp = web.StreamResponse(status=upstream_resp.status, headers=resp_headers)
         await client_resp.prepare(request)
 
         captured = bytearray() if is_messages else None
         try:
             async for chunk in upstream_resp.content.iter_any():
-                await client_resp.write(chunk)          # client first, always
+                await client_resp.write(chunk)  # client first, always
                 if captured is not None and len(captured) < 8_000_000:
-                    captured.extend(chunk)              # tee a bounded copy
+                    remaining = 8_000_000 - len(captured)
+                    captured.extend(chunk[:remaining])  # tee a strictly bounded copy
         finally:
             await client_resp.write_eof()
             upstream_resp.release()
@@ -497,7 +604,9 @@ def make_app(upstream: str = DEFAULT_UPSTREAM, forward: bool = True):
         if captured is not None and parsed_req:
             try:
                 record = _capture(
-                    parsed_req, captured, upstream_resp.headers.get("Content-Type"),
+                    parsed_req,
+                    captured,
+                    upstream_resp.headers.get("Content-Type"),
                     status=upstream_resp.status,
                     duration_ms=int((_time.monotonic() - started) * 1000),
                     forward=forward,
@@ -506,6 +615,7 @@ def make_app(upstream: str = DEFAULT_UPSTREAM, forward: bool = True):
                 )
                 if record and forward:
                     import asyncio
+
                     asyncio.create_task(_emit_record_async(record))
             except Exception as e:  # noqa: BLE001
                 print(f"pisama proxy capture error: {e}", file=sys.stderr)
@@ -515,6 +625,7 @@ def make_app(upstream: str = DEFAULT_UPSTREAM, forward: bool = True):
     async def _emit_record_async(record: Dict[str, Any]):
         try:
             import asyncio
+
             await asyncio.to_thread(emit_proxy_record, record)
         except Exception as e:  # noqa: BLE001
             print(f"pisama proxy forward error: {e}", file=sys.stderr)
@@ -525,16 +636,19 @@ def make_app(upstream: str = DEFAULT_UPSTREAM, forward: bool = True):
     async def _on_cleanup(app):
         await app[session_key].close()
 
-    app = web.Application(client_max_size=1024 ** 3)
+    app = web.Application(client_max_size=1024**3)
     app.on_startup.append(_on_startup)
     app.on_cleanup.append(_on_cleanup)
     app.router.add_route("*", "/{tail:.*}", handler)
     return app
 
 
-def run_proxy(port: int = DEFAULT_PORT, upstream: str = DEFAULT_UPSTREAM, forward: bool = True) -> None:
+def run_proxy(
+    port: int = DEFAULT_PORT, upstream: str = DEFAULT_UPSTREAM, forward: bool = True
+) -> None:
     if web is None:
         raise RuntimeError("aiohttp is required: pip install 'pisama-claude-code[proxy]'")
+    ensure_private_dir(PROXY_DIR)
     app = make_app(upstream=upstream, forward=forward)
     print(f"Pisama proxy listening on http://127.0.0.1:{port} -> {upstream}")
     print(f"Captures: {PROXY_DIR}  (forward={'on' if forward else 'off'})")
@@ -606,6 +720,7 @@ SHELL_MARKER_END = "# <<< pisama-cc proxy <<<"
 
 def _strip_shell_block(text: str) -> str:
     import re
+
     pattern = re.escape(SHELL_MARKER_BEGIN) + r".*?" + re.escape(SHELL_MARKER_END)
     return re.sub(r"\n*" + pattern + r"\n*", "\n", text, flags=re.S)
 

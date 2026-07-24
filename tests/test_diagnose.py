@@ -15,7 +15,11 @@ import pytest
 
 _ENGINE = (
     Path(__file__).resolve().parent.parent
-    / "src" / "pisama_claude_code" / "skills" / "pisama-diagnose" / "diagnose.py"
+    / "src"
+    / "pisama_claude_code"
+    / "skills"
+    / "pisama-diagnose"
+    / "diagnose.py"
 )
 
 
@@ -64,8 +68,13 @@ DIAGNOSIS = {
     "root_cause_explanation": "No progress signal broke the loop.",
 }
 
-TRACE = {"trace_id": "trace-abc", "span_count": 7, "total_tokens": 1200,
-         "source_format": "atif", "atif_schema_version": "ATIF-v1.7"}
+TRACE = {
+    "trace_id": "trace-abc",
+    "span_count": 7,
+    "total_tokens": 1200,
+    "source_format": "atif",
+    "atif_schema_version": "ATIF-v1.7",
+}
 
 # Real-shaped FixSuggestion.ide_patch (see backend app/fixes/models.py).
 IDE_PATCH = {
@@ -115,15 +124,15 @@ class TestRenderReport:
         report = diagnose.render_report(DIAGNOSIS, TRACE, ide_patch=IDE_PATCH)
         assert "# Pisama diagnosis" in report
         assert "## Primary failure" in report
-        assert "agent `researcher`, step 4" in report          # localization
-        assert "## Apply this fix" in report                   # the patch section
-        assert "## Suggested fix" in report                    # still shows prose fix
+        assert "agent `researcher`, step 4" in report  # localization
+        assert "## Apply this fix" in report  # the patch section
+        assert "## Suggested fix" in report  # still shows prose fix
 
     def test_falls_back_to_suggested_fix_without_patch(self):
         report = diagnose.render_report(DIAGNOSIS, TRACE, ide_patch=None)
         assert "## Suggested fix" in report
         assert "Add a retry limit so the loop terminates." in report
-        assert "## Apply this fix" not in report               # no patch section
+        assert "## Apply this fix" not in report  # no patch section
 
     def test_renders_clean_verdict(self):
         clean = {"has_failures": False, "all_detections": [], "detectors_run": ["x"]}
@@ -144,8 +153,11 @@ class TestHelpers:
         assert diagnose._conf_pct(None) == "None"
 
     def test_load_trajectory_bare_and_enveloped(self, tmp_path):
-        traj = {"schema_version": "ATIF-v1.7", "agent": {"name": "a", "version": "1"},
-                "steps": [{"step_id": 1, "source": "user", "message": "hi"}]}
+        traj = {
+            "schema_version": "ATIF-v1.7",
+            "agent": {"name": "a", "version": "1"},
+            "steps": [{"step_id": 1, "source": "user", "message": "hi"}],
+        }
         bare = tmp_path / "bare.json"
         bare.write_text(json.dumps(traj))
         assert diagnose.load_trajectory(str(bare))["schema_version"] == "ATIF-v1.7"

@@ -11,6 +11,12 @@ import sys
 from pathlib import Path
 from typing import Dict
 
+from pisama_claude_code.private_files import (
+    ensure_private_dir,
+    make_private,
+    write_private_text,
+)
+
 HOOK_TEMPLATE = '''#!{python_path}
 """Auto-generated Pisama capture hook."""
 
@@ -49,8 +55,8 @@ def install(force: bool = False, auto_config: bool = True):
 
     # Ensure directories exist
     hooks_dir.mkdir(parents=True, exist_ok=True)
-    pisama_dir.mkdir(parents=True, exist_ok=True)
-    (pisama_dir / "traces").mkdir(exist_ok=True)
+    ensure_private_dir(pisama_dir)
+    ensure_private_dir(pisama_dir / "traces")
 
     # Use the Python executable that has pisama_claude_code installed
     python_path = sys.executable
@@ -65,6 +71,7 @@ def install(force: bool = False, auto_config: bool = True):
     # Install minimal config, preserving connection settings
     config_path = pisama_dir / "config.json"
     default_config = {}
+    config_valid = True
 
     if config_path.exists():
         # Preserve existing config (especially connection settings)
@@ -72,11 +79,14 @@ def install(force: bool = False, auto_config: bool = True):
             existing = json.loads(config_path.read_text())
             default_config = existing
         except json.JSONDecodeError:
-            pass
+            config_valid = False
+            print("Warning: Existing Pisama config is invalid JSON; replacing it")
 
-    if not config_path.exists():
-        config_path.write_text(json.dumps(default_config, indent=2))
+    if not config_path.exists() or not config_valid:
+        write_private_text(config_path, json.dumps(default_config, indent=2))
         print("Installed default config")
+    else:
+        make_private(config_path)
 
     # Update settings.local.json
     settings_updated = _update_settings(claude_dir, hooks_dir, auto_config=auto_config)
@@ -111,10 +121,10 @@ def _install_shell_hooks(hooks_dir: Path, force: bool):
     """Install shell wrapper hooks (capture on PostToolUse, forward on Stop)."""
     # Capture wrapper. Records the tool call + surrounding turn to the local
     # store. Registered async in settings so it stays off the critical path.
-    post_script = '''#!/bin/bash
+    post_script = """#!/bin/bash
 # Pisama capture hook - record the tool call + surrounding turn locally.
 PISAMA_HOOK_TYPE=post ~/.claude/hooks/pisama-capture.py
-'''
+"""
     post_path = hooks_dir / "pisama-post.sh"
     if not post_path.exists() or force:
         post_path.write_text(post_script)
@@ -125,12 +135,12 @@ PISAMA_HOOK_TYPE=post ~/.claude/hooks/pisama-capture.py
     # process, so a slow or failed network call can never block or delay the
     # session, even if the harness does not honor the "async" hook flag. We read
     # the hook payload off stdin first, then hand it to the background process.
-    forward_script = '''#!/bin/bash
+    forward_script = """#!/bin/bash
 # Pisama forward hook - flush unsynced traces to the Pisama platform.
 input=$(cat)
 echo "$input" | nohup ~/.claude/hooks/pisama-forward.py >/dev/null 2>&1 &
 exit 0
-'''
+"""
     forward_path = hooks_dir / "pisama-forward.sh"
     if not forward_path.exists() or force:
         forward_path.write_text(forward_script)
@@ -146,21 +156,25 @@ exit 0
 PISAMA_HOOK_EVENTS = {
     "PostToolUse": {
         "matcher": "*",
-        "hooks": [{
-            "type": "command",
-            "command": "~/.claude/hooks/pisama-post.sh",
-            "timeout": 10,
-            "async": True,
-        }],
+        "hooks": [
+            {
+                "type": "command",
+                "command": "~/.claude/hooks/pisama-post.sh",
+                "timeout": 10,
+                "async": True,
+            }
+        ],
     },
     "Stop": {
         "matcher": "*",
-        "hooks": [{
-            "type": "command",
-            "command": "~/.claude/hooks/pisama-forward.sh",
-            "timeout": 30,
-            "async": True,
-        }],
+        "hooks": [
+            {
+                "type": "command",
+                "command": "~/.claude/hooks/pisama-forward.sh",
+                "timeout": 30,
+                "async": True,
+            }
+        ],
     },
 }
 
@@ -258,6 +272,7 @@ def _bundled_skill_file(name: str) -> "str | None":
     """
     try:
         from importlib.resources import files
+
         base = files("pisama_claude_code") / "skills" / "pisama-diagnose"
         return (base / name).read_text()
     except Exception:
@@ -310,7 +325,7 @@ def uninstall():
     hooks = [
         "pisama-capture.py",
         "pisama-forward.py",
-        "pisama-pre.sh",      # legacy
+        "pisama-pre.sh",  # legacy
         "pisama-post.sh",
         "pisama-forward.sh",
     ]
@@ -493,16 +508,14 @@ Examples:
   pisama-install --verify     Verify installation status
   pisama-install --uninstall  Remove hooks
   pisama-install --no-auto-config  Install without modifying settings
-"""
+""",
     )
-    parser.add_argument("--force", "-f", action="store_true",
-                       help="Overwrite existing hooks")
-    parser.add_argument("--uninstall", "-u", action="store_true",
-                       help="Uninstall hooks")
-    parser.add_argument("--verify", "-v", action="store_true",
-                       help="Verify installation status")
-    parser.add_argument("--no-auto-config", action="store_true",
-                       help="Don't auto-update settings.local.json")
+    parser.add_argument("--force", "-f", action="store_true", help="Overwrite existing hooks")
+    parser.add_argument("--uninstall", "-u", action="store_true", help="Uninstall hooks")
+    parser.add_argument("--verify", "-v", action="store_true", help="Verify installation status")
+    parser.add_argument(
+        "--no-auto-config", action="store_true", help="Don't auto-update settings.local.json"
+    )
 
     args = parser.parse_args()
 
