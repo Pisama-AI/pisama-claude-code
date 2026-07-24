@@ -13,7 +13,7 @@ from pathlib import Path
 
 import pytest
 
-from pisama_claude_code import __version__
+from pisama_claude_code import __version__, private_files
 from pisama_claude_code.cli import api_url, prepare_sync_payload
 from pisama_claude_code.lite_config import LiteConfig
 from pisama_claude_code.lite_storage import LiteStorage
@@ -37,6 +37,16 @@ def test_private_file_helpers_restrict_and_atomically_replace(tmp_path):
     assert _mode(target.parent) == 0o700
     assert _mode(target) == 0o600
     assert list(target.parent.glob(f".{target.name}.*")) == []
+
+
+def test_private_file_helpers_work_without_fchmod(monkeypatch, tmp_path):
+    monkeypatch.delattr(private_files.os, "fchmod", raising=False)
+    target = tmp_path / "private" / "events.jsonl"
+
+    write_private_text(target, '{"event": 1}')
+    append_private_text(target, "\n")
+
+    assert target.read_text() == '{"event": 1}\n'
 
 
 @pytest.mark.skipif(os.name == "nt", reason="Windows does not expose POSIX mode bits")

@@ -10,6 +10,17 @@ PRIVATE_DIR_MODE = 0o700
 PRIVATE_FILE_MODE = 0o600
 
 
+def _restrict_open_file(fd: int) -> None:
+    """Restrict an open descriptor when the platform exposes POSIX modes."""
+    fchmod = getattr(os, "fchmod", None)
+    if fchmod is None:
+        return
+    try:
+        fchmod(fd, PRIVATE_FILE_MODE)
+    except OSError:
+        pass
+
+
 def ensure_private_dir(path: Path) -> None:
     """Create a directory and restrict it to the current user where supported."""
     path.mkdir(parents=True, exist_ok=True, mode=PRIVATE_DIR_MODE)
@@ -38,10 +49,7 @@ def write_private_text(path: Path, content: str) -> None:
     fd, temporary_name = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
     temporary_path = Path(temporary_name)
     try:
-        try:
-            os.fchmod(fd, PRIVATE_FILE_MODE)
-        except OSError:
-            pass
+        _restrict_open_file(fd)
         with os.fdopen(fd, "w", encoding="utf-8") as stream:
             stream.write(content)
         os.replace(temporary_path, path)
@@ -61,10 +69,7 @@ def append_private_text(path: Path, content: str) -> None:
     flags = os.O_APPEND | os.O_CREAT | os.O_WRONLY
     fd = os.open(path, flags, PRIVATE_FILE_MODE)
     try:
-        try:
-            os.fchmod(fd, PRIVATE_FILE_MODE)
-        except OSError:
-            pass
+        _restrict_open_file(fd)
         with os.fdopen(fd, "a", encoding="utf-8") as stream:
             stream.write(content)
     except BaseException:
