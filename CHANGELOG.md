@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.4] - 2026-07-23
+
+### Changed
+
 - Make type checking blocking and fix all reported source errors.
 - Add Python 3.13 and a non-regression coverage floor to CI.
 - Tighten the optional `pisama-core` compatibility range.
@@ -15,24 +19,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   OTLP export that verifies repeated exports and parent-child span relationships.
 - Enforce formatting across source and tests, a Xenon complexity ceiling, and a
   12-line duplicate-code threshold in CI.
-- Store configuration, traces, proxy captures, sync logs, and lite-mode data
-  with user-only permissions on POSIX systems. Configuration replacement is
-  atomic.
 - Use the package version for the CLI, batch wire payloads, proxy payloads, and
   OpenTelemetry resource metadata.
-- Stop the capture hook from retaining a second untokenized copy of its raw
-  payload.
-- Keep OpenTelemetry exports isolated from the host application's global tracer
-  provider and preserve session spans as the parents of tool-call spans.
-- Scope fallback guardian loop detection to the active session.
-- Handle project and personal skill paths consistently on macOS, Linux, and
-  Windows.
-- Preserve tool inputs delivered in an SSE content-block start event and ignore
-  malformed event shapes without losing the capture.
-
-## [0.6.4] - 2026-07-23
-
-### Changed
 - Updated cost estimation for the active Claude Opus 4, Sonnet 5, Sonnet 4,
   and Haiku 4 model families.
 - Accounted for the distinct 5-minute cache-write rate instead of charging
@@ -40,7 +28,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Added automatic handling for the temporary Sonnet 5 introductory price,
   which ends September 1, 2026.
 
+### Security
+
+- Store configuration, traces, proxy captures, sync logs, and lite-mode data
+  with user-only permissions on POSIX systems. Configuration replacement is
+  atomic.
+- Stop the capture hook from retaining a second untokenized copy of its raw
+  payload.
+
 ### Fixed
+
+- Keep OpenTelemetry exports isolated from the host application's global tracer
+  provider and preserve session spans as the parents of tool-call spans.
+- Scope fallback guardian loop detection to the active session.
+- Handle project and personal skill paths consistently on macOS, Linux, and
+  Windows.
+- Preserve tool inputs delivered in an SSE content-block start event and ignore
+  malformed event shapes without losing the capture.
 - Removed the aiohttp application-key warning from the optional reasoning
   proxy.
 - Audited the vault and tokenize commands. The vault surface checked out
