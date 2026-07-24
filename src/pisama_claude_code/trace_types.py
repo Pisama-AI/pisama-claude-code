@@ -109,7 +109,7 @@ def classify_trace(raw_trace: Dict[str, Any]) -> EnhancedTrace:
 
 def analyze_skill_usage(traces: List[Dict[str, Any]]) -> Dict[str, Any]:
     """Analyze skill usage patterns from traces."""
-    skills = {}
+    skills: Dict[str, Dict[str, Any]] = {}
     tool_calls = 0
     mcp_calls = 0
     task_calls = 0

@@ -301,11 +301,11 @@ def get_last_assistant_message(transcript_path: str) -> dict:
         # Collect every assistant content block in the CURRENT turn. Claude Code
         # emits thinking, text and tool_use as separate assistant entries, and a
         # turn ends (going backwards) at the real user text message.
-        all_reasoning = []
-        all_output = []
-        all_tool_calls = []
+        all_reasoning: list[str] = []
+        all_output: list[str] = []
+        all_tool_calls: list[dict[str, Any]] = []
         model = None
-        usage = {}
+        usage: dict[str, Any] = {}
         stop_reason = None
         user_input = None
         asst_seen = 0

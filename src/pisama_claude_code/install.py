@@ -280,6 +280,7 @@ def install_skill(force: bool = False) -> list:
     if engine is None or claude_doc is None:
         print("Skipping skill install (bundled skill assets not found)")
         return []
+    assert codex_doc is not None
 
     targets = [
         (Path.home() / ".claude" / "skills" / "pisama-diagnose", claude_doc),
