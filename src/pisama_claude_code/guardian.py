@@ -13,7 +13,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Optional
 
-from pisama_core.audit import AuditLogger
+from pisama_core.audit import AuditEventType, AuditLogger
 from pisama_core.detection import DetectionOrchestrator
 from pisama_core.healing import HealingEngine
 from pisama_core.injection import EnforcementEngine, EnforcementLevel
@@ -165,10 +165,10 @@ class Guardian:
         # Calculate severity
         if detection_results:
             severity = self.scoring_engine.calculate_severity(detection_results)
-            issues = []
+            issues: list[str] = []
             for result in detection_results:
                 if result.detected:
-                    issues.extend(result.evidence.get("issues", []))
+                    issues.extend(ev.description for ev in result.evidence)
         else:
             severity = 0
             issues = []
@@ -178,13 +178,15 @@ class Guardian:
             # Below threshold - log warning if close
             if severity >= self.config.severity_threshold - 10 and issues:
                 self.audit.log(
-                    "warning",
-                    {
+                    AuditEventType.ISSUE_DETECTED,
+                    session_id,
+                    details={
                         "severity": severity,
                         "issues": issues,
                         "action": "allowed",
-                        "session_id": session_id,
+                        "event": "warning",
                     },
+                    severity=severity,
                 )
             return GuardianResult(
                 severity=severity,
@@ -227,14 +229,16 @@ class Guardian:
     ) -> GuardianResult:
         """Handle report mode - log but don't block."""
         self.audit.log(
-            "report",
-            {
+            AuditEventType.ISSUE_DETECTED,
+            session_id,
+            details={
                 "severity": severity,
                 "issues": issues,
                 "recommendation": recommendation,
                 "action": "logged_only",
-                "session_id": session_id,
+                "event": "report",
             },
+            severity=severity,
         )
 
         # Print warning to stderr
@@ -277,7 +281,7 @@ class Guardian:
         for result in detection_results:
             if result.detected:
                 plan = self.healing_engine.analyze(result)
-                if plan.fixes:
+                if plan.primary_fix:
                     # For now, just use the recommendation
                     break
 
@@ -298,14 +302,16 @@ class Guardian:
 
         # Log
         self.audit.log(
-            "auto_heal",
-            {
+            AuditEventType.FIX_APPLIED,
+            session_id,
+            details={
                 "severity": severity,
                 "issues": issues,
                 "fix_applied": recommendation,
                 "action": "auto_fixed",
-                "session_id": session_id,
+                "event": "auto_heal",
             },
+            severity=severity,
         )
 
         # Track fix count
@@ -351,14 +357,16 @@ class Guardian:
 
         # Log
         self.audit.log(
-            "intervention",
-            {
+            AuditEventType.DIRECTIVE_ISSUED,
+            session_id,
+            details={
                 "severity": severity,
                 "issues": issues,
                 "recommendation": recommendation,
                 "action": "blocked_for_approval" if severity >= 60 else "warning",
-                "session_id": session_id,
+                "event": "intervention",
             },
+            severity=severity,
         )
 
         # Block critical issues
@@ -385,15 +393,17 @@ class Guardian:
         self._write_alert(session_id, severity, issues, recommendation)
 
         self.audit.log(
-            "escalate",
-            {
+            AuditEventType.FIX_RECOMMENDED,
+            session_id,
+            details={
                 "severity": severity,
                 "issues": issues,
                 "recommendation": recommendation,
                 "reason": reason,
                 "action": "escalated_to_manual",
-                "session_id": session_id,
+                "event": "escalate",
             },
+            severity=severity,
         )
 
         # Block and wait for user
