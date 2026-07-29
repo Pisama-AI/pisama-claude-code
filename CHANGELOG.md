@@ -29,6 +29,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Added automatic handling for the temporary Sonnet 5 introductory price,
   which ends September 1, 2026.
 
+### Fixed
+
+- Correct three misuses of the `pisama-core` API in `guardian.py` that raised
+  `AttributeError` at runtime: `DetectionResult.evidence` is a list, not a mapping,
+  so issue extraction now reads each `Evidence.description`; `HealingPlan` exposes
+  `primary_fix`, not `fixes`; and `AuditLogger.log` takes an `AuditEventType` and a
+  session id rather than a string and a details dict. These were invisible to type
+  checking until `pisama-core` 1.8.2 added a `py.typed` marker.
+
 ### Security
 
 - Store configuration, traces, proxy captures, sync logs, and lite-mode data
