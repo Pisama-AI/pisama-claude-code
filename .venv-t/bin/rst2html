@@ -1,0 +1,8 @@
+#!/private/tmp/claude-501/-Users-tuomonikulainen-pisama/04c425fd-1496-4a7c-9557-5960f88b7828/scratchpad/cclic/.venv-t/bin/python3.11
+# -*- coding: utf-8 -*-
+import re
+import sys
+from docutils.core import rst2html
+if __name__ == '__main__':
+    sys.argv[0] = re.sub(r'(-script\.pyw|\.exe)?$', '', sys.argv[0])
+    sys.exit(rst2html())

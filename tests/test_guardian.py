@@ -145,3 +145,68 @@ class TestGuardian:
         guardian = Guardian(pisama_dir=temp_pisama_dir)
         expected_path = temp_pisama_dir / "config.json"
         assert guardian.config_path == expected_path
+
+
+class TestGuardianPisamaCoreContract:
+    """Contract tests against the real pisama-core API.
+
+    These exist because pisama-core 1.8.2 added a `py.typed` marker. Before that
+    mypy treated the whole package as `Any`, so `guardian.py` could call
+    `DetectionResult.evidence.get(...)` and `HealingPlan.fixes` and pass
+    `(str, dict)` to `AuditLogger.log` without anything complaining, at type-check
+    time or in the test suite. Those lines were all uncovered, so the first sign
+    of trouble would have been an AttributeError in a user's session.
+
+    No mocks: these assert against the real objects, so if pisama-core changes
+    these shapes again, this fails here rather than in production.
+    """
+
+    def test_detection_result_evidence_is_a_list_not_a_mapping(self):
+        """`evidence` is list[Evidence]. Calling .get() on it raises."""
+        from pisama_core.detection.result import DetectionResult, Evidence
+
+        result = DetectionResult(
+            detector_name="loop",
+            detected=True,
+            evidence=[Evidence(description="repeated Read on the same path")],
+        )
+        assert isinstance(result.evidence, list)
+        assert not hasattr(result.evidence, "get")
+        # This is the extraction guardian.py performs, and it must yield plain
+        # strings because `issues` is declared list[str] downstream.
+        issues = [ev.description for ev in result.evidence]
+        assert issues == ["repeated Read on the same path"]
+        assert all(isinstance(i, str) for i in issues)
+
+    def test_healing_plan_exposes_primary_fix_not_fixes(self):
+        """HealingPlan has primary_fix/fallback_fixes. `plan.fixes` raises."""
+        from pisama_core.healing import HealingPlan
+
+        fields = set(getattr(HealingPlan, "__annotations__", {}))
+        assert "primary_fix" in fields
+        assert "fixes" not in fields
+
+    def test_audit_logger_log_takes_an_event_type_and_session_id(self, tmp_path):
+        """log() is (AuditEventType, session_id, details=...), not (str, dict)."""
+        from pisama_core.audit import AuditEventType, AuditLogger
+
+        logger = AuditLogger(log_dir=tmp_path)
+        event = logger.log(
+            AuditEventType.ISSUE_DETECTED,
+            "session-abc",
+            details={"severity": 42, "issues": ["loop"], "event": "warning"},
+            severity=42,
+        )
+        assert event.session_id == "session-abc"
+
+    def test_every_event_type_guardian_uses_exists(self):
+        """Guardian maps its legacy event strings onto these members."""
+        from pisama_core.audit import AuditEventType
+
+        for name in (
+            "ISSUE_DETECTED",
+            "FIX_APPLIED",
+            "DIRECTIVE_ISSUED",
+            "FIX_RECOMMENDED",
+        ):
+            assert hasattr(AuditEventType, name), f"AuditEventType.{name} is gone"

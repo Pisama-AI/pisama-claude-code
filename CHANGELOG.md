@@ -7,10 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.5] - 2026-07-30
+
+### Fixed
+
+- Remove the legacy License classifier now that PEP 639 license_expression is set (setuptools>=78 forbids both together).
+
 ## [0.6.4] - 2026-07-23
 
 ### Changed
 
+- Assign the LICENSE copyright to Pisama LLC rather than an individual.
 - Make type checking blocking and fix all reported source errors.
 - Add Python 3.13 and a non-regression coverage floor to CI.
 - Tighten the optional `pisama-core` compatibility range.
@@ -27,6 +34,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   cache creation at the base input rate.
 - Added automatic handling for the temporary Sonnet 5 introductory price,
   which ends September 1, 2026.
+
+### Fixed
+
+- Correct three misuses of the `pisama-core` API in `guardian.py` that raised
+  `AttributeError` at runtime: `DetectionResult.evidence` is a list, not a mapping,
+  so issue extraction now reads each `Evidence.description`; `HealingPlan` exposes
+  `primary_fix`, not `fixes`; and `AuditLogger.log` takes an `AuditEventType` and a
+  session id rather than a string and a details dict. These were invisible to type
+  checking until `pisama-core` 1.8.2 added a `py.typed` marker.
 
 ### Security
 
