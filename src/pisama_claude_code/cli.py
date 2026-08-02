@@ -1534,6 +1534,8 @@ def normalize_trace(t: dict) -> dict:
         "session_id": session_id,
         "tool_input": tool_input,
         "working_dir": t.get("working_dir") or attrs.get("working_dir", ""),
+        "git_root": t.get("git_root") or attrs.get("git_root"),
+        "git_revision": t.get("git_revision") or attrs.get("git_revision"),
         # Model and token usage
         "model": t.get("model"),
         "input_tokens": input_tokens,
@@ -1681,6 +1683,8 @@ def prepare_sync_payload(traces: list, include_outputs: bool) -> dict:
             "hook_type": t.get("hook_type"),
             "session_id": t.get("session_id"),
             "working_dir": anonymize_path(t.get("working_dir", "")),
+            "git_root": anonymize_path(t.get("git_root", "")),
+            "git_revision": t.get("git_revision"),
             # Model and token usage
             "model": t.get("model"),
             "input_tokens": t.get("input_tokens"),

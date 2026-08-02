@@ -14,9 +14,10 @@ from pathlib import Path
 import pytest
 
 from pisama_claude_code import __version__, private_files
-from pisama_claude_code.cli import api_url, prepare_sync_payload
+from pisama_claude_code.cli import api_url, normalize_trace, prepare_sync_payload
 from pisama_claude_code.lite_config import LiteConfig
 from pisama_claude_code.lite_storage import LiteStorage
+from pisama_claude_code.otel_export import convert_trace_to_otel_dict
 from pisama_claude_code.private_files import append_private_text, write_private_text
 from pisama_claude_code.proxy import store_record
 from pisama_claude_code.trace_types import SkillSource, TraceType, classify_trace
@@ -106,6 +107,78 @@ _capture({
     assert _mode(traces_dir) == 0o700
     assert _mode(jsonl_path) == 0o600
     assert _mode(traces_dir / "pisama.db") == 0o600
+
+
+def test_capture_preserves_real_git_revision_through_forwarding(tmp_path):
+    repository = tmp_path / "revision-source"
+    repository.mkdir()
+    subprocess.run(["git", "init", str(repository)], check=True, capture_output=True)
+    subprocess.run(
+        ["git", "-C", str(repository), "config", "user.email", "test@pisama.ai"],
+        check=True,
+    )
+    subprocess.run(
+        ["git", "-C", str(repository), "config", "user.name", "Pisama Test"],
+        check=True,
+    )
+    (repository / "tracked.py").write_text("value = 1\n")
+    subprocess.run(["git", "-C", str(repository), "add", "tracked.py"], check=True)
+    subprocess.run(
+        ["git", "-C", str(repository), "commit", "-m", "capture revision"],
+        check=True,
+        capture_output=True,
+    )
+    revision = subprocess.run(
+        ["git", "-C", str(repository), "rev-parse", "HEAD"],
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+
+    code = """
+from pathlib import Path
+from pisama_claude_code.hooks.capture_hook import _capture
+_capture({
+    "session_id": "revision-session",
+    "tool_name": "Read",
+    "tool_input": {"file_path": str(Path.cwd() / "tracked.py")},
+    "cwd": str(Path.cwd()),
+}, "pre")
+"""
+    environment = {
+        **os.environ,
+        "HOME": str(tmp_path / "capture-home"),
+        "USERPROFILE": str(tmp_path / "capture-home"),
+        "PISAMA_TOKENIZATION": "0",
+        "PYTHONPATH": str(Path(__file__).parents[1] / "src"),
+    }
+    result = subprocess.run(
+        [sys.executable, "-c", code],
+        cwd=repository,
+        env=environment,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr
+
+    traces_dir = tmp_path / "capture-home" / ".claude" / "pisama" / "traces"
+    record = json.loads(next(traces_dir.glob("traces-*.jsonl")).read_text())
+    assert record["git_root"] == str(repository)
+    assert record["git_revision"] == revision
+    with sqlite3.connect(traces_dir / "pisama.db") as connection:
+        stored = connection.execute("SELECT git_root, git_revision FROM traces").fetchone()
+    assert stored == (str(repository), revision)
+
+    normalized = normalize_trace(record)
+    sent = prepare_sync_payload([normalized], include_outputs=False)["traces"][0]
+    assert sent["git_root"] == str(repository)
+    assert sent["git_revision"] == revision
+    span = convert_trace_to_otel_dict(normalized)
+    state_attribute = next(item for item in span["attributes"] if item["key"] == "gen_ai.state")
+    state = json.loads(state_attribute["value"]["stringValue"])
+    assert state["git_root"] == str(repository)
+    assert state["git_revision"] == revision
 
 
 def _create_guardian_db(home: Path, rows: list[tuple[str, str]]) -> None:

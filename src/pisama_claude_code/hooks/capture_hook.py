@@ -16,6 +16,7 @@ Usage:
 
 import json
 import os
+import subprocess
 import sys
 from datetime import date
 from typing import Any
@@ -94,6 +95,24 @@ def calculate_cost(model: str, usage: dict) -> float:
         + (cache_create / 1_000_000) * pricing["cache_write"]
     )
     return round(cost, 6)
+
+
+def get_git_context(working_dir: str) -> dict[str, str]:
+    """Return repository root and exact revision without disrupting capture."""
+    try:
+        result = subprocess.run(
+            ["git", "-C", working_dir, "rev-parse", "--show-toplevel", "HEAD"],
+            capture_output=True,
+            text=True,
+            timeout=1,
+            check=False,
+        )
+    except (OSError, TypeError, subprocess.SubprocessError):
+        return {}
+    lines = result.stdout.splitlines()
+    if result.returncode != 0 or len(lines) != 2:
+        return {}
+    return {"git_root": lines[0], "git_revision": lines[1]}
 
 
 def get_tokenizer(session_id: str) -> Any:
@@ -441,6 +460,7 @@ def _capture(hook_data: dict, hook_type: str) -> None:
     if tool_output is None:
         tool_output = hook_data.get("tool_output")
     working_dir = hook_data.get("cwd") or hook_data.get("working_dir") or os.getcwd()
+    git_context = get_git_context(working_dir)
 
     # Agent identity: Claude Code sets agent_id/agent_type on hook payloads
     # only when the tool call runs inside a subagent (Task/workflow fan-out).
@@ -489,6 +509,7 @@ def _capture(hook_data: dict, hook_type: str) -> None:
         "tool_input": tool_input,
         "tool_output": tool_output,
         "working_dir": working_dir,
+        **git_context,
         # Agent identity (None/False for main-loop calls)
         "agent_id": agent_id,
         "agent_type": agent_type,
@@ -526,6 +547,8 @@ def _capture(hook_data: dict, hook_type: str) -> None:
                 tool_input TEXT,
                 tool_output TEXT,
                 working_dir TEXT,
+                git_root TEXT,
+                git_revision TEXT,
                 model TEXT,
                 input_tokens INTEGER,
                 output_tokens INTEGER,
@@ -552,6 +575,8 @@ def _capture(hook_data: dict, hook_type: str) -> None:
             ("reasoning", "TEXT"),
             ("ai_output", "TEXT"),
             ("ai_response", "TEXT"),
+            ("git_root", "TEXT"),
+            ("git_revision", "TEXT"),
         ]:
             try:
                 conn.execute(f"ALTER TABLE traces ADD COLUMN {col} {col_type}")
@@ -563,10 +588,11 @@ def _capture(hook_data: dict, hook_type: str) -> None:
             """
             INSERT INTO traces (
                 session_id, timestamp, hook_type, tool_name, tool_input, tool_output,
-                working_dir, model, input_tokens, output_tokens, cache_read_tokens, cost_usd,
+                working_dir, git_root, git_revision, model,
+                input_tokens, output_tokens, cache_read_tokens, cost_usd,
                 user_input, reasoning, ai_output, ai_response
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
             (
                 session_id,
@@ -576,6 +602,8 @@ def _capture(hook_data: dict, hook_type: str) -> None:
                 json.dumps(trace.get("tool_input")) if trace.get("tool_input") else None,
                 json.dumps(trace.get("tool_output")) if trace.get("tool_output") else None,
                 working_dir,
+                trace.get("git_root"),
+                trace.get("git_revision"),
                 model,
                 usage.get("input_tokens"),
                 usage.get("output_tokens"),
@@ -615,6 +643,7 @@ def _capture(hook_data: dict, hook_type: str) -> None:
                         "tool_input": trace.get("tool_input"),
                         "tool_output": trace.get("tool_output"),
                         "working_dir": working_dir,
+                        **git_context,
                         "agent_id": agent_id,
                         "agent_type": agent_type,
                         "is_sidechain": is_sidechain,

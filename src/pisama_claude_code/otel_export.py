@@ -252,6 +252,8 @@ def convert_trace_to_otel_dict(trace: Dict[str, Any]) -> Dict[str, Any]:
         "cost_usd",
         "cache_read_tokens",
         "working_dir",
+        "git_root",
+        "git_revision",
         "agent_id",
         "agent_type",
         "is_sidechain",
