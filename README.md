@@ -254,8 +254,6 @@ Platform features:
 |-----------|---------|--------|
 | Claude Code | `pisama-claude-code` | Stable |
 | LangChain/LangGraph | `pisama-core` SDK | Available |
-| CrewAI | `pisama-core` SDK | Available |
-| AutoGen | `pisama-core` SDK | Available |
 | n8n | `pisama-core` SDK | Available |
 
 For other frameworks, see the [Pisama integration docs](https://docs.pisama.ai/integrations).
