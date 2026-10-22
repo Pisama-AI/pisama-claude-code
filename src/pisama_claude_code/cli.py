@@ -305,10 +305,7 @@ def emit_span(trace: dict, config: Optional[dict] = None) -> tuple:
 
     from pisama_claude_code.otel_export import convert_trace_to_otel_dict
 
-    safe = dict(trace)
-    for k in ("user_input", "reasoning", "ai_output", "tool_output", "tool_input"):
-        if safe.get(k) is not None:
-            safe[k] = _cap_field(safe[k])
+    safe = _scrubbed_trace(trace)
 
     session_id = str(safe.get("session_id") or "")
     payload = {
@@ -1365,7 +1362,7 @@ def export(last: int, output: str, compress: bool, fmt: str):
         if output == "traces-export.jsonl":
             output = "traces-export-otel.json"
 
-        result = export_to_otel_file(traces_list, output)
+        result = export_to_otel_file([_scrubbed_trace(t) for t in traces_list], output)
         click.echo(f"✅ Exported {result['spans_created']} spans to {output} (OTEL format)")
         click.echo(f"   Sessions: {result['sessions_exported']}")
         return
@@ -1384,10 +1381,10 @@ def export(last: int, output: str, compress: bool, fmt: str):
             "output_tokens": t.get("output_tokens"),
             "cache_read_tokens": t.get("cache_read_tokens"),
             "cost_usd": t.get("cost_usd"),
-            # Input/Reasoning/Output content (PII already tokenized by capture hook)
-            "user_input": t.get("user_input"),
-            "reasoning": t.get("reasoning"),
-            "ai_output": t.get("ai_output"),
+            # Input/Reasoning/Output content: secrets scrubbed, full length kept
+            "user_input": _scrub_secrets(t.get("user_input")),
+            "reasoning": _scrub_secrets(t.get("reasoning")),
+            "ai_output": _scrub_secrets(t.get("ai_output")),
         }
         # Include sanitized tool input
         inp = t.get("tool_input", {})
@@ -1474,7 +1471,7 @@ def export_otel(last: int, endpoint: str, service_name: str, header: tuple):
 
     try:
         result = export_traces_to_otel(
-            traces=traces_list,
+            traces=[_scrubbed_trace(t) for t in traces_list],
             endpoint=endpoint,
             service_name=service_name,
             headers=headers if headers else None,
@@ -1619,26 +1616,40 @@ def _traces_for_sessions(session_ids) -> list:
 
 
 # Built-in secret scrubber: redacts common credential shapes from any content
-# before it is forwarded to the platform. This runs by default on every install
-# (no extras, no keychain) so secrets never leave the machine un-scrubbed. The
-# optional [core] extra adds pisama-core's reversible keychain vault on top.
+# before it leaves the machine (Pisama sync, OTEL export, file export). This
+# runs by default on every install (no extras, no keychain). The optional
+# [core] extra adds pisama-core's reversible keychain vault on top.
+# Short prefixes start at a non-alphanumeric boundary ("task-..." and
+# "disk_test_..." are words, not keys) or right after an escaped "\n" inside
+# JSON-serialized content.
+_B = r"(?:(?<![A-Za-z0-9])|(?<=\\[nrt]))"
 _SECRET_PATTERNS = [
     re.compile(p)
     for p in [
         r"sk-ant-[A-Za-z0-9_\-]{20,}",  # Anthropic API keys
-        r"sk-[A-Za-z0-9]{20,}",  # OpenAI-style keys
+        _B + r"sk-[A-Za-z0-9_\-]{20,}",  # OpenAI-style keys, incl. sk-proj-
         r"pisama_[A-Za-z0-9_\-]{20,}",  # Pisama API keys
         r"eyJ[A-Za-z0-9_\-]{8,}\.[A-Za-z0-9_\-]{8,}\.[A-Za-z0-9_\-]+",  # JWTs
         r"gh[pousr]_[A-Za-z0-9]{20,}",  # GitHub tokens
         r"github_pat_[A-Za-z0-9_]{20,}",  # GitHub fine-grained PATs
-        r"AKIA[0-9A-Z]{16}",  # AWS access key id
+        r"(?:AKIA|ASIA)[0-9A-Z]{16}",  # AWS access key ids
         r"xox[baprs]-[A-Za-z0-9\-]{10,}",  # Slack tokens
         r"AIza[0-9A-Za-z_\-]{30,}",  # Google API keys
+        r"ya29\.[A-Za-z0-9_\-]{20,}",  # Google OAuth access tokens
+        _B + r"[rs]k_(?:live|test)_[A-Za-z0-9]{16,}",  # Stripe keys
+        _B + r"npm_[A-Za-z0-9]{36}",  # npm tokens
+        r"pypi-AgE[A-Za-z0-9_\-]{50,}",  # PyPI tokens
+        _B + r"hf_[A-Za-z0-9]{30,}",  # Hugging Face tokens
+        r"glpat-[A-Za-z0-9_\-]{20,}",  # GitLab tokens
+        r"FlyV1 [A-Za-z0-9_+/=,\-]{20,}",  # Fly.io tokens
+        r"-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?(?:-----END [A-Z ]*PRIVATE KEY-----|\Z)",
+        r"(?<=://)[^\s:/@]+:[^\s@/]+(?=@)",  # user:password in URLs
+        r"(?i)\bbearer\s+[A-Za-z0-9._~+/=\-]{20,}",  # Authorization headers
     ]
 ]
 
 
-def _scrub_secrets(s: str) -> str:
+def _scrub_secrets(s: Any) -> Any:
     """Replace credential-shaped substrings with [REDACTED]."""
     if not isinstance(s, str) or not s:
         return s
@@ -1668,6 +1679,22 @@ def _cap_field(value):
     if len(serialized) <= MAX_FIELD_CHARS:
         return value
     return serialized[:MAX_FIELD_CHARS] + "...[truncated]"
+
+
+_CONTENT_FIELDS = ("user_input", "reasoning", "ai_output", "tool_output", "tool_input")
+
+
+def _scrubbed_trace(trace: dict) -> dict:
+    """Copy of a captured trace with every content field scrubbed and bounded.
+
+    Every path that sends or writes traces off the local capture store goes
+    through this (or prepare_sync_payload), including third-party OTEL export.
+    """
+    safe = dict(trace)
+    for k in _CONTENT_FIELDS:
+        if safe.get(k) is not None:
+            safe[k] = _cap_field(safe[k])
+    return safe
 
 
 def prepare_sync_payload(traces: list, include_outputs: bool) -> dict:
@@ -1722,9 +1749,9 @@ def prepare_sync_payload(traces: list, include_outputs: bool) -> dict:
 
 def sanitize_input(inp: dict) -> dict:
     """Remove sensitive data from tool input (redact secret keys, scrub secret
-    values, anonymize paths, bound size)."""
-    clean = {}
-    sensitive_keys = {"api_key", "password", "secret", "token", "credential"}
+    values, anonymize paths, bound size), at every nesting level."""
+    clean: dict[str, Any] = {}
+    sensitive_keys = {"api_key", "api-key", "password", "secret", "token", "credential", "authorization"}
 
     for k, v in inp.items():
         # Redact values under secret-named keys
@@ -1733,8 +1760,11 @@ def sanitize_input(inp: dict) -> dict:
         # Anonymize file paths
         elif k in ("file_path", "path"):
             clean[k] = anonymize_path(str(v))
-        # Scrub credential-shaped substrings + bound size for string values
-        elif isinstance(v, str):
+        # Nested objects (MCP arguments, HTTP headers) get the same treatment
+        elif isinstance(v, dict):
+            clean[k] = sanitize_input(v)
+        # Scrub credential-shaped substrings + bound size for strings and lists
+        elif isinstance(v, (str, list)):
             clean[k] = _cap_field(v)
         else:
             clean[k] = v
