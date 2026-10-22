@@ -353,3 +353,34 @@ async def test_proxy_passthrough_and_capture(tmp_path, monkeypatch):
     finally:
         await proxy_server.close()
         await up_server.close()
+
+
+@pytest.mark.asyncio
+async def test_proxy_upstream_failure_does_not_expose_exception_detail(
+    tmp_path, monkeypatch, capsys
+):
+    """An unreachable upstream yields a generic 502; the detail goes to stderr only."""
+    aiohttp = pytest.importorskip("aiohttp")
+    import socket
+
+    from aiohttp.test_utils import TestServer
+
+    monkeypatch.setattr(proxy, "PROXY_DIR", tmp_path)
+    with socket.socket() as probe:  # a port with nothing listening
+        probe.bind(("127.0.0.1", 0))
+        closed_port = probe.getsockname()[1]
+
+    proxy_server = TestServer(
+        proxy.make_app(upstream=f"http://127.0.0.1:{closed_port}", forward=False)
+    )
+    await proxy_server.start_server()
+    try:
+        async with aiohttp.ClientSession() as s:
+            async with s.post(f"http://127.0.0.1:{proxy_server.port}/v1/messages", data=b"{}") as r:
+                status, body = r.status, await r.text()
+    finally:
+        await proxy_server.close()
+
+    assert status == 502
+    assert body == "pisama proxy: upstream request failed"
+    assert str(closed_port) in capsys.readouterr().err

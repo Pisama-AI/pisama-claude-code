@@ -13,6 +13,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Scrub secrets from `export` (JSONL) content fields at full length.
 - Redact OpenAI project keys (`sk-proj-`), Stripe, npm, PyPI, Hugging Face, GitLab, Fly.io and Google OAuth tokens, private key blocks, URL passwords and bearer headers, including right after an escaped newline in serialized content.
 - Apply tool-input redaction to nested objects and lists (MCP arguments, HTTP headers), and treat `authorization` and `api-key` keys as secret.
+- The local proxy no longer returns the upstream exception text in its 502 response; the detail goes to stderr only (CodeQL `py/stack-trace-exposure`).
 
 ## [0.6.5] - 2026-07-30
 
