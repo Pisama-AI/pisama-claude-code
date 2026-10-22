@@ -1382,9 +1382,9 @@ def export(last: int, output: str, compress: bool, fmt: str):
             "cache_read_tokens": t.get("cache_read_tokens"),
             "cost_usd": t.get("cost_usd"),
             # Input/Reasoning/Output content: secrets scrubbed, full length kept
-            "user_input": _scrub_secrets(t.get("user_input")),
-            "reasoning": _scrub_secrets(t.get("reasoning")),
-            "ai_output": _scrub_secrets(t.get("ai_output")),
+            "user_input": _redact_text(t.get("user_input")),
+            "reasoning": _redact_text(t.get("reasoning")),
+            "ai_output": _redact_text(t.get("ai_output")),
         }
         # Include sanitized tool input
         inp = t.get("tool_input", {})
@@ -1649,7 +1649,7 @@ _SECRET_PATTERNS = [
 ]
 
 
-def _scrub_secrets(s: Any) -> Any:
+def _redact_text(s: Any) -> Any:
     """Replace credential-shaped substrings with [REDACTED]."""
     if not isinstance(s, str) or not s:
         return s
@@ -1661,13 +1661,13 @@ def _scrub_secrets(s: Any) -> Any:
 def _cap_field(value):
     """Make a field safe to forward: scrub secrets + bound to MAX_FIELD_CHARS."""
     if isinstance(value, str):
-        s = _scrub_secrets(value)
+        s = _redact_text(value)
         return s if len(s) <= MAX_FIELD_CHARS else s[:MAX_FIELD_CHARS] + "...[truncated]"
     try:
         serialized = json.dumps(value)
     except (TypeError, ValueError):
         serialized = str(value)
-    scrubbed = _scrub_secrets(serialized)
+    scrubbed = _redact_text(serialized)
     if scrubbed != serialized:
         # Contained a secret; return the scrubbed (flattened) form rather than
         # the original structure, so nothing sensitive slips through.
@@ -1751,7 +1751,15 @@ def sanitize_input(inp: dict) -> dict:
     """Remove sensitive data from tool input (redact secret keys, scrub secret
     values, anonymize paths, bound size), at every nesting level."""
     clean: dict[str, Any] = {}
-    sensitive_keys = {"api_key", "api-key", "password", "secret", "token", "credential", "authorization"}
+    sensitive_keys = {
+        "api_key",
+        "api-key",
+        "password",
+        "secret",
+        "token",
+        "credential",
+        "authorization",
+    }
 
     for k, v in inp.items():
         # Redact values under secret-named keys

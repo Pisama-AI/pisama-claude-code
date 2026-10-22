@@ -189,9 +189,9 @@ class TestPrivacy:
         assert len(result["content"]) <= MAX_FIELD_CHARS + len("...[truncated]")
         assert "[truncated]" in result["content"]
 
-    def test_scrub_secrets_patterns(self):
+    def test_redact_text_patterns(self):
         """The built-in scrubber redacts common credential shapes."""
-        from pisama_claude_code.cli import _scrub_secrets
+        from pisama_claude_code.cli import _redact_text
 
         cases = [
             "sk-ant-api03-" + "A" * 40,
@@ -201,7 +201,7 @@ class TestPrivacy:
             "AKIA" + "D" * 16,
         ]
         for secret in cases:
-            out = _scrub_secrets(f"value is {secret} end")
+            out = _redact_text(f"value is {secret} end")
             assert secret not in out and "[REDACTED]" in out, secret
 
     def test_forward_payload_scrubs_content(self):
@@ -224,31 +224,32 @@ class TestPrivacy:
         blob = json.dumps(payload)
         assert secret not in blob and "[REDACTED]" in blob
 
-    def test_scrub_secrets_covers_project_keys_blocks_and_urls(self):
-        from pisama_claude_code.cli import _scrub_secrets
+    def test_redact_text_covers_project_keys_blocks_and_urls(self):
+        from pisama_claude_code.cli import _redact_text
 
         cases = [
             "sk-proj-" + "Ab_cD-ef12" * 10,
             "sk_live_" + "E" * 24,
             "npm_" + "F" * 36,
             "hf_" + "G" * 34,
-            "-----BEGIN " + "OPENSSH PRIVATE KEY-----\nb3BlbnNzaC1rZXk\n-----END OPENSSH PRIVATE KEY-----",
+            "-----BEGIN "
+            + "OPENSSH PRIVATE KEY-----\nb3BlbnNzaC1rZXk\n-----END OPENSSH PRIVATE KEY-----",
             "Authorization: Bearer " + "H" * 30,
         ]
         for secret in cases:
-            out = _scrub_secrets(f"value is {secret} end")
+            out = _redact_text(f"value is {secret} end")
             assert secret[-12:] not in out and "[REDACTED]" in out, secret
         url = "postgresql://app:" + "S3cr3tValue" + "@db:5432/x"
-        assert _scrub_secrets(url) == "postgresql://[REDACTED]@db:5432/x"
+        assert _redact_text(url) == "postgresql://[REDACTED]@db:5432/x"
         # json.dumps turns a newline into a literal backslash-n right before the key.
         escaped = json.dumps({"out": "ok\nsk-proj-" + "J" * 30})
-        assert "J" * 30 not in _scrub_secrets(escaped)
+        assert "J" * 30 not in _redact_text(escaped)
 
-    def test_scrub_secrets_leaves_ordinary_words(self):
-        from pisama_claude_code.cli import _scrub_secrets
+    def test_redact_text_leaves_ordinary_words(self):
+        from pisama_claude_code.cli import _redact_text
 
         text = "task-decomposition-and-planning-module uses disk_test_harness_configuration_x"
-        assert _scrub_secrets(text) == text
+        assert _redact_text(text) == text
 
     def test_sanitize_input_scrubs_nested_values(self):
         from pisama_claude_code.cli import sanitize_input
