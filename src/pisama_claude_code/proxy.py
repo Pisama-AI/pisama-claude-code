@@ -581,7 +581,9 @@ def make_app(upstream: str = DEFAULT_UPSTREAM, forward: bool = True):
                 data=body or None,
             )
         except Exception as e:  # noqa: BLE001
-            return web.Response(status=502, text=f"pisama proxy upstream error: {e}")
+            # Detail stays in the local log; the client only learns the request failed.
+            print(f"pisama proxy upstream error: {e}", file=sys.stderr)
+            return web.Response(status=502, text="pisama proxy: upstream request failed")
 
         resp_headers = {
             k: v for k, v in upstream_resp.headers.items() if k.lower() not in _HOP_BY_HOP
