@@ -189,9 +189,9 @@ class TestPrivacy:
         assert len(result["content"]) <= MAX_FIELD_CHARS + len("...[truncated]")
         assert "[truncated]" in result["content"]
 
-    def test_scrub_secrets_patterns(self):
+    def test_redact_text_patterns(self):
         """The built-in scrubber redacts common credential shapes."""
-        from pisama_claude_code.cli import _scrub_secrets
+        from pisama_claude_code.cli import _redact_text
 
         cases = [
             "sk-ant-api03-" + "A" * 40,
@@ -201,7 +201,7 @@ class TestPrivacy:
             "AKIA" + "D" * 16,
         ]
         for secret in cases:
-            out = _scrub_secrets(f"value is {secret} end")
+            out = _redact_text(f"value is {secret} end")
             assert secret not in out and "[REDACTED]" in out, secret
 
     def test_forward_payload_scrubs_content(self):
@@ -223,6 +223,76 @@ class TestPrivacy:
         payload = prepare_sync_payload(traces, include_outputs=True)
         blob = json.dumps(payload)
         assert secret not in blob and "[REDACTED]" in blob
+
+    def test_redact_text_covers_project_keys_blocks_and_urls(self):
+        from pisama_claude_code.cli import _redact_text
+
+        cases = [
+            "sk-proj-" + "Ab_cD-ef12" * 10,
+            "sk_live_" + "E" * 24,
+            "npm_" + "F" * 36,
+            "hf_" + "G" * 34,
+            "-----BEGIN "
+            + "OPENSSH PRIVATE KEY-----\nb3BlbnNzaC1rZXk\n-----END OPENSSH PRIVATE KEY-----",
+            "Authorization: Bearer " + "H" * 30,
+        ]
+        for secret in cases:
+            out = _redact_text(f"value is {secret} end")
+            assert secret[-12:] not in out and "[REDACTED]" in out, secret
+        url = "postgresql://app:" + "S3cr3tValue" + "@db:5432/x"
+        assert _redact_text(url) == "postgresql://[REDACTED]@db:5432/x"
+        # json.dumps turns a newline into a literal backslash-n right before the key.
+        escaped = json.dumps({"out": "ok\nsk-proj-" + "J" * 30})
+        assert "J" * 30 not in _redact_text(escaped)
+
+    def test_redact_text_leaves_ordinary_words(self):
+        from pisama_claude_code.cli import _redact_text
+
+        text = "task-decomposition-and-planning-module uses disk_test_harness_configuration_x"
+        assert _redact_text(text) == text
+
+    def test_sanitize_input_scrubs_nested_values(self):
+        from pisama_claude_code.cli import sanitize_input
+
+        token = "ghp_" + "K" * 36
+        inp = {
+            "headers": {"Authorization": "opaque", "X-Api-Key": "opaque"},
+            "args": ["--with-token", token],
+            "options": {"retries": 3},
+        }
+        result = sanitize_input(inp)
+        assert result["headers"] == {"Authorization": "[REDACTED]", "X-Api-Key": "[REDACTED]"}
+        assert token not in json.dumps(result)
+        assert result["options"] == {"retries": 3}
+
+    def test_otel_file_export_scrubs_content(self, tmp_path):
+        """export --format otel writes scrubbed content, like Pisama sync."""
+        secret = "sk-ant-api03-" + "Q" * 40
+        traces_dir = tmp_path / "traces"
+        traces_dir.mkdir()
+        (traces_dir / "traces-2026-01-01.jsonl").write_text(
+            json.dumps(
+                {
+                    "timestamp": "2026-01-01T00:00:00+00:00",
+                    "tool_name": "Bash",
+                    "hook_type": "PostToolUse",
+                    "session_id": "s",
+                    "user_input": f"use {secret}",
+                    "ai_output": f"set {secret}",
+                    "tool_input": {"command": f"export KEY={secret}"},
+                    "tool_output": f"printed {secret}",
+                }
+            )
+            + "\n"
+        )
+        output_file = tmp_path / "out.json"
+        with patch("pisama_claude_code.cli.TRACES_DIR", traces_dir):
+            result = CliRunner().invoke(
+                main, ["export", "--format", "otel", "-o", str(output_file)]
+            )
+        assert result.exit_code == 0, result.output
+        blob = output_file.read_text()
+        assert "Bash" in blob and secret not in blob
 
 
 class TestDetection:
